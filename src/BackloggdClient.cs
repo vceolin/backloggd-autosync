@@ -424,17 +424,37 @@ namespace BackloggdAutoSync
             if (pt != null)
             {
                 status.IsLogged = true;
-                status.PlaythroughId = Convert.ToInt32(mostRecentPtId);
+                status.PlaythroughId = ToIntSafe(mostRecentPtId, -1);
                 if (pt.ContainsKey("title") && pt["title"] != null)
                     status.PlaythroughTitle = Convert.ToString(pt["title"]);
                 if (pt.ContainsKey("platform") && pt["platform"] != null)
-                    status.PlatformId = Convert.ToInt32(pt["platform"]);
+                    status.PlatformId = ToIntSafe(pt["platform"], 6);
                 if (pt.ContainsKey("rating") && pt["rating"] != null)
-                    status.Rating = Convert.ToInt32(pt["rating"]);
+                    status.Rating = ToIntSafe(pt["rating"], 0);
+                if (pt.ContainsKey("review") && pt["review"] != null)
+                    status.Review = Convert.ToString(pt["review"]);
+                if (pt.ContainsKey("review_spoilers") && pt["review_spoilers"] != null)
+                    status.ReviewSpoilers = Convert.ToBoolean(pt["review_spoilers"]);
+                if (pt.ContainsKey("start_date") && pt["start_date"] != null)
+                    status.StartDate = Convert.ToString(pt["start_date"]);
+                if (pt.ContainsKey("finish_date") && pt["finish_date"] != null)
+                    status.FinishDate = Convert.ToString(pt["finish_date"]);
+                if (pt.ContainsKey("is_master") && pt["is_master"] != null)
+                    status.IsMaster = Convert.ToBoolean(pt["is_master"]);
+                if (pt.ContainsKey("is_replay") && pt["is_replay"] != null)
+                    status.IsReplay = Convert.ToBoolean(pt["is_replay"]);
+                if (pt.ContainsKey("hours_finished") && pt["hours_finished"] != null)
+                    status.HoursFinished = ToIntSafe(pt["hours_finished"], 0);
+                if (pt.ContainsKey("mins_finished") && pt["mins_finished"] != null)
+                    status.MinsFinished = ToIntSafe(pt["mins_finished"], 0);
+                if (pt.ContainsKey("hours_mastered") && pt["hours_mastered"] != null)
+                    status.HoursMastered = ToIntSafe(pt["hours_mastered"], 0);
+                if (pt.ContainsKey("mins_mastered") && pt["mins_mastered"] != null)
+                    status.MinsMastered = ToIntSafe(pt["mins_mastered"], 0);
                 if (pt.ContainsKey("hours_played") && pt["hours_played"] != null)
-                    status.HoursPlayed = Convert.ToInt32(pt["hours_played"]);
+                    status.HoursPlayed = ToIntSafe(pt["hours_played"], 0);
                 if (pt.ContainsKey("mins_played") && pt["mins_played"] != null)
-                    status.MinsPlayed = Convert.ToInt32(pt["mins_played"]);
+                    status.MinsPlayed = ToIntSafe(pt["mins_played"], 0);
 
                 ArrayList playDatesList = pt.ContainsKey("play_dates") ? pt["play_dates"] as ArrayList : null;
                 if (playDatesList != null)
@@ -446,11 +466,11 @@ namespace BackloggdAutoSync
                         {
                             var entry = new PlayDateEntry
                             {
-                                id = pd.ContainsKey("id") && pd["id"] != null ? Convert.ToInt32(pd["id"]) : -1,
+                                id = pd.ContainsKey("id") && pd["id"] != null ? ToIntSafe(pd["id"], -1) : -1,
                                 range_start_date = pd.ContainsKey("range_start_date") && pd["range_start_date"] != null ? Convert.ToString(pd["range_start_date"]) : "",
                                 range_end_date = pd.ContainsKey("range_end_date") && pd["range_end_date"] != null ? Convert.ToString(pd["range_end_date"]) : "",
-                                hours = pd.ContainsKey("hours") && pd["hours"] != null ? Convert.ToInt32(pd["hours"]) : 0,
-                                minutes = pd.ContainsKey("minutes") && pd["minutes"] != null ? Convert.ToInt32(pd["minutes"]) : 0,
+                                hours = pd.ContainsKey("hours") && pd["hours"] != null ? ToIntSafe(pd["hours"], 0) : 0,
+                                minutes = pd.ContainsKey("minutes") && pd["minutes"] != null ? ToIntSafe(pd["minutes"], 0) : 0,
                                 status = pd.ContainsKey("status") ? pd["status"] : null,
                                 note = pd.ContainsKey("note") && pd["note"] != null ? Convert.ToString(pd["note"]) : "",
                                 edited = false,
@@ -475,7 +495,20 @@ namespace BackloggdAutoSync
             return status;
         }
 
-        public static SyncResult SyncSession(string gameId, int durationSec, string dateStr, AppSettings settings, string note = null)
+        private static int ToIntSafe(object val, int fallback)
+        {
+            if (val == null) return fallback;
+            try
+            {
+                return (int)Math.Round(Convert.ToDouble(val));
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
+        public static SyncResult SyncSession(string gameId, int durationSec, string dateStr, AppSettings settings, string note = null, int defaultPlatformId = 6, bool setExactDayTotal = false)
         {
             var result = new SyncResult
             {
@@ -505,9 +538,10 @@ namespace BackloggdAutoSync
 
             GameLogStatus logStatus = GetGameLogStatus(gameId, settings);
 
+            string defaultPtTitle = defaultPlatformId == 130 ? "Nintendo Switch" : "Windows PC";
             int playthroughId;
             string playthroughTitle;
-            int platformId = logStatus.PlatformId > 0 ? logStatus.PlatformId : 6;
+            int platformId = (logStatus.IsLogged && logStatus.PlatformId > 0) ? logStatus.PlatformId : defaultPlatformId;
             int rating = logStatus.Rating;
             List<PlayDateEntry> existingDates = new List<PlayDateEntry>(logStatus.PlayDates);
             bool isNewLog = false;
@@ -518,13 +552,15 @@ namespace BackloggdAutoSync
             if (logStatus.IsLogged && logStatus.PlaythroughId.HasValue)
             {
                 playthroughId = logStatus.PlaythroughId.Value;
-                playthroughTitle = !string.IsNullOrEmpty(logStatus.PlaythroughTitle) ? logStatus.PlaythroughTitle : "Windows PC";
+                playthroughTitle = !string.IsNullOrEmpty(logStatus.PlaythroughTitle) ? logStatus.PlaythroughTitle : defaultPtTitle;
 
                 int existingIdx = existingDates.FindIndex(d => d.range_start_date == dateStr);
                 if (existingIdx >= 0)
                 {
                     PlayDateEntry existing = existingDates[existingIdx];
-                    int totalMinutes = existing.hours * 60 + existing.minutes + addHours * 60 + addMins;
+                    int totalMinutes = setExactDayTotal
+                        ? Math.Max(existing.hours * 60 + existing.minutes, addHours * 60 + addMins)
+                        : (existing.hours * 60 + existing.minutes + addHours * 60 + addMins);
                     finalDayHours = totalMinutes / 60;
                     finalDayMins = totalMinutes % 60;
 
@@ -535,7 +571,7 @@ namespace BackloggdAutoSync
                     {
                         existing.note = string.IsNullOrEmpty(existing.note) ? note : (existing.note + "; " + note);
                     }
-                    accumulated = true;
+                    accumulated = !setExactDayTotal;
                 }
                 else
                 {
@@ -560,7 +596,7 @@ namespace BackloggdAutoSync
             {
                 isNewLog = true;
                 playthroughId = -1;
-                playthroughTitle = "Windows PC";
+                playthroughTitle = defaultPtTitle;
                 existingDates.Add(new PlayDateEntry
                 {
                     id = -1,
@@ -599,6 +635,18 @@ namespace BackloggdAutoSync
             formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][sync_sessions]", "true"));
             formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][hours_played]", ptHours.ToString()));
             formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][mins_played]", ptMins.ToString()));
+            if (!isNewLog)
+            {
+                if (logStatus.Review != null)
+                    formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][review]", logStatus.Review));
+                formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][review_spoilers]", logStatus.ReviewSpoilers ? "true" : "false"));
+                if (!string.IsNullOrEmpty(logStatus.StartDate))
+                    formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][start_date]", logStatus.StartDate));
+                if (!string.IsNullOrEmpty(logStatus.FinishDate))
+                    formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][finish_date]", logStatus.FinishDate));
+                formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][is_master]", logStatus.IsMaster ? "true" : "false"));
+                formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][is_replay]", logStatus.IsReplay ? "true" : "false"));
+            }
 
             // dates[playthroughId][i]
             string ptKey = playthroughId.ToString();

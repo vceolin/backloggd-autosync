@@ -19,6 +19,13 @@ namespace BackloggdAutoSync
         public bool StartMinimized { get; set; }
         public List<int> IgnoredAppIds { get; set; }
 
+        // Nintendo Switch Integration Settings
+        public string NintendoSessionToken { get; set; }
+        public string NintendoAccountNickname { get; set; }
+        public string NintendoAccountId { get; set; }
+        public bool NintendoAutoSync { get; set; }
+        public int NintendoSyncDaysBack { get; set; }
+
         public AppSettings()
         {
             SessionCookie = "";
@@ -30,14 +37,19 @@ namespace BackloggdAutoSync
             AutoSyncOnExit = true;
             SplitAtMidnight = true;
             StartMinimized = false;
+            NintendoSessionToken = "";
+            NintendoAccountNickname = "";
+            NintendoAccountId = "";
+            NintendoAutoSync = true;
+            NintendoSyncDaysBack = 14;
             IgnoredAppIds = new List<int>
             {
-                228980, // Steamworks Common Redistributables
-                250820, // SteamVR
+                228980,  // Steamworks Common Redistributables
+                250820,  // SteamVR
                 1070560, // Steam Linux Runtime
                 1391110, // Steam Linux Runtime - Soldier
                 1628350, // Steam Linux Runtime - Sniper
-                431960   // Wallpaper Engine (often left running in background; user can remove from ignore list if desired)
+                431960   // Wallpaper Engine
             };
         }
     }
@@ -45,6 +57,7 @@ namespace BackloggdAutoSync
     public class GameMapping
     {
         public int AppId { get; set; }
+        public string SwitchApplicationId { get; set; }
         public string BackloggdGameId { get; set; }
         public string SteamTitle { get; set; }
         public string BackloggdTitle { get; set; }
@@ -56,13 +69,16 @@ namespace BackloggdAutoSync
     public class SessionEntry
     {
         public string Id { get; set; }
+        public string Platform { get; set; } // "Steam", "Switch", "Manual"
         public int AppId { get; set; }
+        public string SwitchApplicationId { get; set; }
         public string GameTitle { get; set; }
         public string BackloggdGameId { get; set; }
         public string DateStr { get; set; } // YYYY-MM-DD
         public string StartTimeIso { get; set; }
         public string EndTimeIso { get; set; }
         public int DurationSeconds { get; set; }
+        public bool SetExactDayPlaytime { get; set; }
         public bool Synced { get; set; }
         public bool AccumulatedOnBackloggd { get; set; }
         public int TotalDayMinutesOnBackloggd { get; set; }
@@ -124,6 +140,16 @@ namespace BackloggdAutoSync
         public string PlaythroughTitle { get; set; }
         public int PlatformId { get; set; }
         public int Rating { get; set; }
+        public string Review { get; set; }
+        public bool ReviewSpoilers { get; set; }
+        public string StartDate { get; set; }
+        public string FinishDate { get; set; }
+        public bool IsMaster { get; set; }
+        public bool IsReplay { get; set; }
+        public int HoursFinished { get; set; }
+        public int MinsFinished { get; set; }
+        public int HoursMastered { get; set; }
+        public int MinsMastered { get; set; }
         public string Status { get; set; }
         public bool IsPlay { get; set; }
         public bool IsPlaying { get; set; }
@@ -210,6 +236,7 @@ namespace BackloggdAutoSync
                     if (loaded != null)
                     {
                         if (loaded.IgnoredAppIds == null) loaded.IgnoredAppIds = new List<int>();
+                        if (loaded.NintendoSyncDaysBack <= 0) loaded.NintendoSyncDaysBack = 14;
                         return loaded;
                     }
                 }

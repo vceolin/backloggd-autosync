@@ -231,6 +231,7 @@ namespace BackloggdAutoSync
             var entry = new SessionEntry
             {
                 Id = string.Format("sess_{0}_{1}", DateTime.Now.Ticks, appId),
+                Platform = "Steam",
                 AppId = appId,
                 GameTitle = existingMap != null && !string.IsNullOrEmpty(existingMap.BackloggdTitle) ? existingMap.BackloggdTitle : title,
                 BackloggdGameId = existingMap != null ? existingMap.BackloggdGameId : null,
@@ -238,6 +239,7 @@ namespace BackloggdAutoSync
                 StartTimeIso = startIso,
                 EndTimeIso = endIso,
                 DurationSeconds = durationSec,
+                SetExactDayPlaytime = false,
                 Synced = false,
                 SyncError = null,
                 RetryCount = 0
@@ -321,6 +323,7 @@ namespace BackloggdAutoSync
                         map = new GameMapping
                         {
                             AppId = entry.AppId,
+                            SwitchApplicationId = entry.SwitchApplicationId,
                             BackloggdGameId = best.GameId,
                             SteamTitle = rawTitle,
                             BackloggdTitle = best.Title,
@@ -345,11 +348,15 @@ namespace BackloggdAutoSync
                         }
                     }
 
+                    int defaultPlatformId = string.Equals(entry.Platform, "Switch", StringComparison.OrdinalIgnoreCase) ? 130 : 6;
                     SyncResult res = BackloggdClient.SyncSession(
                         entry.BackloggdGameId,
                         entry.DurationSeconds,
                         entry.DateStr,
-                        settings);
+                        settings,
+                        null,
+                        defaultPlatformId,
+                        entry.SetExactDayPlaytime);
 
                     if (res.Success)
                     {
@@ -379,6 +386,105 @@ namespace BackloggdAutoSync
                 DataStore.SaveSessions(sessions);
                 if (OnSessionSynced != null) OnSessionSynced(entry);
             }
+        }
+
+        public string FetchAndSyncNintendoSwitchSummaries(bool allowInteractivePrompt, out int newOrUpdatedCount)
+        {
+            newOrUpdatedCount = 0;
+            var settings = DataStore.LoadSettings();
+            if (string.IsNullOrWhiteSpace(settings.NintendoSessionToken))
+            {
+                return "No Nintendo Account connected yet.";
+            }
+
+            string idToken, accessToken, nickname, accountId;
+            NintendoSwitchClient.RefreshTokensAndProfile(settings.NintendoSessionToken, out idToken, out accessToken, out nickname, out accountId);
+
+            if (!string.IsNullOrEmpty(nickname) && settings.NintendoAccountNickname != nickname)
+            {
+                settings.NintendoAccountNickname = nickname;
+                settings.NintendoAccountId = accountId;
+                DataStore.SaveSettings(settings);
+            }
+
+            var devices = NintendoSwitchClient.FetchOwnedDevices(idToken);
+            if (devices.Count == 0)
+            {
+                return "No Nintendo Switch consoles linked to Nintendo Switch Parental Controls on this account.";
+            }
+
+            var allDailyRecords = new List<NintendoDailyGameRecord>();
+            foreach (var dev in devices)
+            {
+                var recs = NintendoSwitchClient.FetchDailySummaries(idToken, dev, settings.NintendoSyncDaysBack);
+                allDailyRecords.AddRange(recs);
+            }
+
+            var sessions = DataStore.LoadSessions();
+            var mappings = DataStore.LoadMappings();
+            var sessionIdsToSync = new List<string>();
+
+            foreach (var rec in allDailyRecords)
+            {
+                int switchAppId = NintendoSwitchClient.GetStableSwitchAppId(rec.ApplicationId, rec.Title);
+                int durationSec = rec.PlayingTimeMinutes * 60;
+                if (durationSec < settings.MinSessionSeconds) continue;
+
+                var existingSession = sessions.Find(s =>
+                    s.DateStr == rec.DateStr &&
+                    (s.AppId == switchAppId || (!string.IsNullOrEmpty(rec.ApplicationId) && s.SwitchApplicationId == rec.ApplicationId)));
+
+                if (existingSession != null)
+                {
+                    // Update if Nintendo reported more playtime on this date than previously recorded
+                    if (durationSec > existingSession.DurationSeconds || !existingSession.Synced)
+                    {
+                        existingSession.DurationSeconds = Math.Max(existingSession.DurationSeconds, durationSec);
+                        existingSession.Platform = "Switch";
+                        existingSession.SetExactDayPlaytime = true;
+                        existingSession.Synced = false;
+                        existingSession.SyncError = null;
+                        sessionIdsToSync.Add(existingSession.Id);
+                        newOrUpdatedCount++;
+                    }
+                }
+                else
+                {
+                    var existingMap = mappings.Find(m => m.AppId == switchAppId || (!string.IsNullOrEmpty(rec.ApplicationId) && m.SwitchApplicationId == rec.ApplicationId));
+                    var newEntry = new SessionEntry
+                    {
+                        Id = string.Format("nx_{0}_{1}", rec.DateStr.Replace("-", ""), Math.Abs(switchAppId)),
+                        Platform = "Switch",
+                        AppId = switchAppId,
+                        SwitchApplicationId = rec.ApplicationId,
+                        GameTitle = (existingMap != null && !string.IsNullOrEmpty(existingMap.BackloggdTitle)) ? existingMap.BackloggdTitle : rec.Title,
+                        BackloggdGameId = existingMap != null ? existingMap.BackloggdGameId : null,
+                        DateStr = rec.DateStr,
+                        StartTimeIso = rec.DateStr + "T12:00:00",
+                        EndTimeIso = rec.DateStr + "T12:00:00",
+                        DurationSeconds = durationSec,
+                        SetExactDayPlaytime = true,
+                        Synced = false
+                    };
+                    sessions.Insert(0, newEntry);
+                    sessionIdsToSync.Add(newEntry.Id);
+                    newOrUpdatedCount++;
+                }
+            }
+
+            if (sessionIdsToSync.Count > 0)
+            {
+                // Sort sessions newest date first
+                sessions.Sort((a, b) => string.Compare(b.DateStr, a.DateStr, StringComparison.Ordinal));
+                DataStore.SaveSessions(sessions);
+
+                for (int i = 0; i < sessionIdsToSync.Count; i++)
+                {
+                    SyncSessionEntryAsync(sessionIdsToSync[i], allowInteractivePrompt && i == 0);
+                }
+            }
+
+            return string.Format("Checked {0} Switch console(s): {1} daily game session(s) synced/updated.", devices.Count, newOrUpdatedCount);
         }
 
         public static int GetRunningSteamAppId()

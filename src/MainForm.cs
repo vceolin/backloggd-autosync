@@ -52,7 +52,18 @@ namespace BackloggdAutoSync
         private Button _btnDeleteMapping;
         private ListView _lvMappings;
 
-        // Tab 3: Settings
+        // Tab 3: Nintendo Switch Sync
+        private NintendoLoginChallenge _nintendoChallenge;
+        private Button _btnNintendoOpenLogin;
+        private TextBox _txtNintendoAuthUrl;
+        private Button _btnNintendoConnect;
+        private Label _lblNintendoStatus;
+        private Button _btnNintendoSyncNow;
+        private NumericUpDown _numNintendoDaysBack;
+        private CheckBox _chkNintendoAutoSync;
+        private DateTime _lastNintendoAutoSyncTime = DateTime.MinValue;
+
+        // Tab 4: Settings
         private TextBox _txtCookie;
         private Button _btnVerifyCookie;
         private Label _lblVerifyResult;
@@ -236,14 +247,17 @@ namespace BackloggdAutoSync
 
             var tabSessions = new TabPage("Daily Diary & Sessions") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
             var tabMappings = new TabPage("Game Mappings (Auto-Suggest)") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
+            var tabSwitch = new TabPage("Nintendo Switch Sync") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
             var tabSettings = new TabPage("Backloggd Account & Settings") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
 
             BuildSessionsTab(tabSessions);
             BuildMappingsTab(tabMappings);
+            BuildNintendoSwitchTab(tabSwitch);
             BuildSettingsTab(tabSettings);
 
             _tabControl.TabPages.Add(tabSessions);
             _tabControl.TabPages.Add(tabMappings);
+            _tabControl.TabPages.Add(tabSwitch);
             _tabControl.TabPages.Add(tabSettings);
             _tabControl.SelectedIndexChanged += (s, e) =>
             {
@@ -314,10 +328,10 @@ namespace BackloggdAutoSync
             };
             _lvSessions.Columns.Add("Date", 95);
             _lvSessions.Columns.Add("Game Title", 240);
-            _lvSessions.Columns.Add("Steam AppID", 90);
-            _lvSessions.Columns.Add("Session Duration", 115);
-            _lvSessions.Columns.Add("Backloggd Status", 150);
-            _lvSessions.Columns.Add("Details (Double-click row to change game)", 220);
+            _lvSessions.Columns.Add("Platform / ID", 105);
+            _lvSessions.Columns.Add("Session Duration", 110);
+            _lvSessions.Columns.Add("Backloggd Status", 145);
+            _lvSessions.Columns.Add("Details (Double-click row to change game)", 215);
             _lvSessions.DoubleClick += BtnPickGameForSession_Click;
 
             var spacer = new Panel { Dock = DockStyle.Top, Height = 10, BackColor = BgDark };
@@ -450,6 +464,259 @@ namespace BackloggdAutoSync
             page.Controls.Add(_lvMappings);
             page.Controls.Add(spacer);
             page.Controls.Add(editorCard);
+        }
+
+        private void BuildNintendoSwitchTab(TabPage page)
+        {
+            var card = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = BgCard,
+                Padding = new Padding(20),
+                AutoScroll = true
+            };
+
+            var lblHeader = new Label
+            {
+                Text = "Nintendo Switch / Switch 2 — Official Daily Play Summary Sync",
+                Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
+                ForeColor = TextLight,
+                AutoSize = true,
+                Location = new Point(20, 16)
+            };
+
+            var lblDesc = new Label
+            {
+                Text = "Syncs your exact daily minutes per game directly from Nintendo's servers — works on stock Switch consoles even when your PC is off!\r\n" +
+                       "Note: Your Switch must be linked to the free 'Nintendo Switch Parental Controls' app on your Nintendo Account (you can set\r\n" +
+                       "Restriction Level to 'None' so it never restricts your console—it just unlocks official daily playtime tracking per game!).",
+                ForeColor = TextMuted,
+                AutoSize = true,
+                Location = new Point(20, 44)
+            };
+
+            var lblStep1 = new Label
+            {
+                Text = "Step 1: Click below to open Nintendo Account sign-in in your browser:",
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                ForeColor = TextLight,
+                AutoSize = true,
+                Location = new Point(20, 114)
+            };
+
+            _btnNintendoOpenLogin = CreateStyledButton("1. Open Nintendo Account Login", AccentBlue, 250, 34);
+            _btnNintendoOpenLogin.Location = new Point(20, 140);
+            _btnNintendoOpenLogin.Click += BtnNintendoOpenLogin_Click;
+
+            var lblStep2 = new Label
+            {
+                Text = "Step 2: On the Nintendo page, right-click the red 'Select this person' button -> 'Copy link address', and paste it here:",
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                ForeColor = TextLight,
+                AutoSize = true,
+                Location = new Point(20, 188)
+            };
+
+            _txtNintendoAuthUrl = new TextBox
+            {
+                Location = new Point(20, 214),
+                Width = 600,
+                BackColor = BgInput,
+                ForeColor = TextLight,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+
+            _btnNintendoConnect = CreateStyledButton("2. Connect Nintendo Account", AccentPink, 220, 30);
+            _btnNintendoConnect.Location = new Point(632, 211);
+            _btnNintendoConnect.Click += BtnNintendoConnect_Click;
+
+            _lblNintendoStatus = new Label
+            {
+                Text = !string.IsNullOrEmpty(_settings.NintendoSessionToken)
+                    ? string.Format("✓ Connected to Nintendo Account: {0}", _settings.NintendoAccountNickname ?? "Linked")
+                    : "Not connected to Nintendo Account yet.",
+                ForeColor = !string.IsNullOrEmpty(_settings.NintendoSessionToken) ? SuccessGreen : TextMuted,
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                AutoSize = true,
+                Location = new Point(20, 254)
+            };
+
+            var lblStep3 = new Label
+            {
+                Text = "3. Sync Switch Daily Playtime to Backloggd Diary (Platform: Nintendo Switch)",
+                Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
+                ForeColor = TextLight,
+                AutoSize = true,
+                Location = new Point(20, 298)
+            };
+
+            _btnNintendoSyncNow = CreateStyledButton("🔄 Fetch & Sync Switch Playtime Now", AccentPink, 285, 38);
+            _btnNintendoSyncNow.Location = new Point(20, 330);
+            _btnNintendoSyncNow.Click += BtnNintendoSyncNow_Click;
+
+            var lblDaysBack = new Label
+            {
+                Text = "Days of Switch history to sync:",
+                Location = new Point(325, 340),
+                AutoSize = true
+            };
+
+            _numNintendoDaysBack = new NumericUpDown
+            {
+                Location = new Point(525, 337),
+                Width = 70,
+                Minimum = 1,
+                Maximum = 60,
+                Value = Math.Max(1, Math.Min(60, _settings.NintendoSyncDaysBack)),
+                BackColor = BgInput,
+                ForeColor = TextLight
+            };
+            _numNintendoDaysBack.ValueChanged += (s, e) =>
+            {
+                _settings.NintendoSyncDaysBack = (int)_numNintendoDaysBack.Value;
+                DataStore.SaveSettings(_settings);
+            };
+
+            _chkNintendoAutoSync = new CheckBox
+            {
+                Text = "Automatically check & sync Nintendo Switch daily playtime every 30 minutes in the background",
+                Checked = _settings.NintendoAutoSync,
+                Location = new Point(20, 384),
+                AutoSize = true
+            };
+            _chkNintendoAutoSync.CheckedChanged += (s, e) =>
+            {
+                _settings.NintendoAutoSync = _chkNintendoAutoSync.Checked;
+                DataStore.SaveSettings(_settings);
+            };
+
+            card.Controls.AddRange(new Control[]
+            {
+                lblHeader, lblDesc, lblStep1, _btnNintendoOpenLogin,
+                lblStep2, _txtNintendoAuthUrl, _btnNintendoConnect, _lblNintendoStatus,
+                lblStep3, _btnNintendoSyncNow, lblDaysBack, _numNintendoDaysBack, _chkNintendoAutoSync
+            });
+
+            page.Controls.Add(card);
+        }
+
+        private void BtnNintendoOpenLogin_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                _nintendoChallenge = NintendoSwitchClient.CreateLoginChallenge();
+                Process.Start(_nintendoChallenge.LoginUrl);
+                _lblNintendoStatus.Text = "Browser opened! Sign in, right-click 'Select this person' -> 'Copy link address', and paste above.";
+                _lblNintendoStatus.ForeColor = WarnOrange;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Failed to open browser: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void BtnNintendoConnect_Click(object sender, EventArgs e)
+        {
+            if (_nintendoChallenge == null || string.IsNullOrEmpty(_nintendoChallenge.CodeVerifier))
+            {
+                MessageBox.Show("Please click '1. Open Nintendo Account Login' first so a login challenge is generated.",
+                    "Step 1 Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string pasted = _txtNintendoAuthUrl.Text.Trim();
+            if (string.IsNullOrEmpty(pasted))
+            {
+                MessageBox.Show("Please paste the 'npf54789befb391a838://auth#...' link copied from the 'Select this person' button.",
+                    "Paste Link", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            _btnNintendoConnect.Enabled = false;
+            _btnNintendoConnect.Text = "Connecting...";
+            _lblNintendoStatus.Text = "Exchanging token with Nintendo...";
+            _lblNintendoStatus.ForeColor = TextMuted;
+
+            string verifier = _nintendoChallenge.CodeVerifier;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    string sessionToken = NintendoSwitchClient.ExchangeCodeForSessionToken(pasted, verifier);
+                    string idToken, accessToken, nickname, accountId;
+                    NintendoSwitchClient.RefreshTokensAndProfile(sessionToken, out idToken, out accessToken, out nickname, out accountId);
+                    var devices = NintendoSwitchClient.FetchOwnedDevices(idToken);
+
+                    _settings.NintendoSessionToken = sessionToken;
+                    _settings.NintendoAccountNickname = nickname ?? "Connected";
+                    _settings.NintendoAccountId = accountId ?? "";
+                    DataStore.SaveSettings(_settings);
+
+                    BeginInvoke(new Action(() =>
+                    {
+                        _btnNintendoConnect.Enabled = true;
+                        _btnNintendoConnect.Text = "2. Connect Nintendo Account";
+                        _txtNintendoAuthUrl.Text = "";
+                        _lblNintendoStatus.Text = string.Format("✓ Connected as {0}! Found {1} linked Switch console(s).",
+                            _settings.NintendoAccountNickname, devices.Count);
+                        _lblNintendoStatus.ForeColor = SuccessGreen;
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        _btnNintendoConnect.Enabled = true;
+                        _btnNintendoConnect.Text = "2. Connect Nintendo Account";
+                        _lblNintendoStatus.Text = "✗ Connection failed: " + ex.Message;
+                        _lblNintendoStatus.ForeColor = Color.FromArgb(231, 76, 60);
+                    }));
+                }
+            });
+        }
+
+        private void BtnNintendoSyncNow_Click(object sender, EventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(_settings.NintendoSessionToken))
+            {
+                MessageBox.Show("Please connect your Nintendo Account in Steps 1 & 2 above first.",
+                    "Nintendo Account Not Connected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            _btnNintendoSyncNow.Enabled = false;
+            _btnNintendoSyncNow.Text = "Fetching Switch Summaries...";
+            _lblNintendoStatus.Text = "Contacting Nintendo Switch Daily Summary service...";
+            _lblNintendoStatus.ForeColor = TextMuted;
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    int count;
+                    string msg = _tracker.FetchAndSyncNintendoSwitchSummaries(true, out count);
+                    _lastNintendoAutoSyncTime = DateTime.Now;
+                    BeginInvoke(new Action(() =>
+                    {
+                        _btnNintendoSyncNow.Enabled = true;
+                        _btnNintendoSyncNow.Text = "🔄 Fetch & Sync Switch Playtime Now";
+                        _lblNintendoStatus.Text = "✓ " + msg;
+                        _lblNintendoStatus.ForeColor = SuccessGreen;
+                        RefreshSessionsList();
+                        RefreshMappingsList();
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        _btnNintendoSyncNow.Enabled = true;
+                        _btnNintendoSyncNow.Text = "🔄 Fetch & Sync Switch Playtime Now";
+                        _lblNintendoStatus.Text = "✗ Switch sync error: " + ex.Message;
+                        _lblNintendoStatus.ForeColor = Color.FromArgb(231, 76, 60);
+                    }));
+                }
+            });
         }
 
         private void BuildSettingsTab(TabPage page)
@@ -725,7 +992,7 @@ namespace BackloggdAutoSync
             {
                 MessageBox.Show("Please connect your _backloggd_session cookie in the Settings tab first!",
                     "Cookie Needed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _tabControl.SelectedIndex = 2;
+                _tabControl.SelectedIndex = 3;
                 return;
             }
 
@@ -1032,6 +1299,31 @@ namespace BackloggdAutoSync
         {
             _tracker.Poll(_settings);
             UpdateLiveStatusUi();
+
+            // Check Nintendo Switch daily summaries every 30 minutes in background if enabled
+            if (_settings.NintendoAutoSync &&
+                !string.IsNullOrWhiteSpace(_settings.NintendoSessionToken) &&
+                (DateTime.Now - _lastNintendoAutoSyncTime).TotalMinutes >= 30)
+            {
+                _lastNintendoAutoSyncTime = DateTime.Now;
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    try
+                    {
+                        int count;
+                        _tracker.FetchAndSyncNintendoSwitchSummaries(false, out count);
+                        if (count > 0 && IsHandleCreated && !IsDisposed)
+                        {
+                            BeginInvoke(new Action(() =>
+                            {
+                                RefreshSessionsList();
+                                RefreshMappingsList();
+                            }));
+                        }
+                    }
+                    catch { }
+                });
+            }
         }
 
         private void UpdateLiveStatusUi()
@@ -1137,7 +1429,10 @@ namespace BackloggdAutoSync
                 var item = new ListViewItem(s.DateStr);
                 item.Tag = s;
                 item.SubItems.Add(s.GameTitle ?? ("App " + s.AppId));
-                item.SubItems.Add(s.AppId > 0 ? s.AppId.ToString() : "Manual");
+                string platText = string.Equals(s.Platform, "Switch", StringComparison.OrdinalIgnoreCase)
+                    ? "Nintendo Switch"
+                    : (s.AppId > 0 ? ("Steam (" + s.AppId + ")") : "Manual");
+                item.SubItems.Add(platText);
                 item.SubItems.Add(FormatDuration(s.DurationSeconds));
 
                 if (s.Synced)

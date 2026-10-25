@@ -8,6 +8,7 @@ $outExe = Join-Path $PSScriptRoot "BackloggdAutoSync.exe"
 $sources = @(
     (Join-Path $PSScriptRoot "src\Models.cs"),
     (Join-Path $PSScriptRoot "src\BackloggdClient.cs"),
+    (Join-Path $PSScriptRoot "src\NintendoSwitchClient.cs"),
     (Join-Path $PSScriptRoot "src\SteamTracker.cs"),
     (Join-Path $PSScriptRoot "src\MainForm.cs"),
     (Join-Path $PSScriptRoot "src\Program.cs")
