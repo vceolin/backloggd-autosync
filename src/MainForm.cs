@@ -701,9 +701,10 @@ namespace BackloggdAutoSync
                             _btnNintendoConnect.Enabled = true;
                             _btnNintendoConnect.Text = "2. Connect Nintendo Account";
                             _txtNintendoAuthUrl.Text = "";
-                            _lblNintendoStatus.Text = string.Format("✓ Nintendo Store All-Time History connected ({0})! Found {1} all-time games across all years.",
+                            _lblNintendoStatus.Text = string.Format("✓ Nintendo Store All-Time History connected ({0})! Found {1} all-time games across all years. Syncing now...",
                                 _settings.NintendoAccountNickname ?? "Connected", allTime.Count);
                             _lblNintendoStatus.ForeColor = SuccessGreen;
+                            RunNintendoSwitchSync(true);
                         }));
                     }
                     else
@@ -748,6 +749,29 @@ namespace BackloggdAutoSync
 
         private void BtnNintendoSyncAllHistory_Click(object sender, EventArgs e)
         {
+            if (string.IsNullOrWhiteSpace(_settings.NintendoStoreSessionToken))
+            {
+                var dr = MessageBox.Show(
+                    "Your Parental Controls connection only has history from when Parental Controls was linked (June 2025).\r\n\r\n" +
+                    "To fetch all your Switch 1 games across all years (2017–present) from the Nintendo Store app:\r\n" +
+                    "1. Click 'Yes' below to open the Nintendo Store Login (1b) in your browser.\r\n" +
+                    "2. Right-click 'Select this person' -> 'Copy link address'.\r\n" +
+                    "3. Paste it into Step 2 and click '2. Connect Nintendo Account', then click this button again!\r\n\r\n" +
+                    "Open the Nintendo Store Login (1b) in your browser now?",
+                    "Connect Nintendo Store (1b) for Switch 1 All-Time History",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Information);
+
+                if (dr == DialogResult.Yes)
+                {
+                    BtnNintendoOpenStoreLogin_Click(sender, e);
+                    return;
+                }
+                if (dr == DialogResult.Cancel)
+                {
+                    return;
+                }
+            }
             RunNintendoSwitchSync(true);
         }
 
