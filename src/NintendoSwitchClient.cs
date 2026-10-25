@@ -12,6 +12,7 @@ namespace BackloggdAutoSync
 {
     public class NintendoLoginChallenge
     {
+        public string ClientId { get; set; }
         public string LoginUrl { get; set; }
         public string CodeVerifier { get; set; }
         public string State { get; set; }
@@ -40,16 +41,33 @@ namespace BackloggdAutoSync
         public int PlayingTimeMinutes { get; set; }
     }
 
+    public class NintendoAllTimeGameRecord
+    {
+        public string TitleId { get; set; }
+        public string TitleName { get; set; }
+        public string Platform { get; set; }
+        public string FirstPlayedDate { get; set; } // YYYY-MM-DD
+        public string LastPlayedDate { get; set; }  // YYYY-MM-DD
+        public int TotalPlayedDays { get; set; }
+        public int TotalPlayedMinutes { get; set; }
+    }
+
     public static class NintendoSwitchClient
     {
-        private const string ClientId = "54789befb391a838";
+        public const string ParentalClientId = "54789befb391a838";
+        public const string StoreClientId = "5c38e31cd085304b";
+
+        private const string ClientId = ParentalClientId;
         private const string RedirectUri = "npf54789befb391a838://auth";
+        private const string StoreRedirectUri = "npf5c38e31cd085304b://auth";
         private const string GrantType = "urn:ietf:params:oauth:grant-type:jwt-bearer-session-token";
         private const string AuthorizeBaseUrl = "https://accounts.nintendo.com/connect/1.0.0/authorize";
         private const string SessionTokenUrl = "https://accounts.nintendo.com/connect/1.0.0/api/session_token";
         private const string TokenUrl = "https://accounts.nintendo.com/connect/1.0.0/api/token";
         private const string MyAccountUrl = "https://api.accounts.nintendo.com/2.0.0/users/me";
         private const string MoonBaseUrl = "https://app.lp1.znma.srv.nintendo.net";
+        private const string StoreHistoryUrl = "https://app-api.znej.nintendo.com/api/v2.0/users/me/play_histories";
+        private const string StoreUserAgent = "com.nintendo.znej/3.2.0 (iOS/26.0.1)";
 
         private const string MobileAppPkg = "com.nintendo.znma";
         private const string MobileAppVersion = "2.6.0";
@@ -108,24 +126,30 @@ namespace BackloggdAutoSync
             }
         }
 
-        public static NintendoLoginChallenge CreateLoginChallenge()
+        public static NintendoLoginChallenge CreateLoginChallenge(bool useNintendoStoreClient = false)
         {
             string verifier = GenerateRandomAlphaString(50);
             string state = GenerateRandomAlphaString(50);
             string challenge = ComputeCodeChallenge(verifier);
-            string scopeStr = string.Join("+", Array.ConvertAll(Scopes, s => Uri.EscapeDataString(s)));
+
+            string targetClientId = useNintendoStoreClient ? StoreClientId : ParentalClientId;
+            string targetRedirect = useNintendoStoreClient ? StoreRedirectUri : RedirectUri;
+            string scopeStr = useNintendoStoreClient
+                ? "openid+user+user.mii+user.email+user.links%5B%5D.id"
+                : string.Join("+", Array.ConvertAll(Scopes, s => Uri.EscapeDataString(s)));
 
             string url = string.Format(
                 "{0}?client_id={1}&redirect_uri={2}&response_type=session_token_code&scope={3}&session_token_code_challenge={4}&session_token_code_challenge_method=S256&state={5}&theme=login_form",
                 AuthorizeBaseUrl,
-                Uri.EscapeDataString(ClientId),
-                Uri.EscapeDataString(RedirectUri),
+                Uri.EscapeDataString(targetClientId),
+                Uri.EscapeDataString(targetRedirect),
                 scopeStr,
                 Uri.EscapeDataString(challenge),
                 Uri.EscapeDataString(state));
 
             return new NintendoLoginChallenge
             {
+                ClientId = targetClientId,
                 LoginUrl = url,
                 CodeVerifier = verifier,
                 State = state
@@ -151,17 +175,26 @@ namespace BackloggdAutoSync
             return null;
         }
 
-        public static string ExchangeCodeForSessionToken(string responseUrlOrCode, string codeVerifier)
+        public static string ExchangeCodeForSessionToken(string responseUrlOrCode, string codeVerifier, string clientId = null)
         {
             string code = ExtractSessionTokenCode(responseUrlOrCode);
             if (string.IsNullOrEmpty(code))
             {
-                throw new Exception("Could not find 'session_token_code' in the pasted link. Make sure you right-clicked 'Select this person' and copied the link address (starts with npf54789befb391a838://auth#...).");
+                throw new Exception("Could not find 'session_token_code' in the pasted link. Make sure you right-clicked 'Select this person' and copied the link address.");
+            }
+
+            string targetClientId = clientId;
+            if (string.IsNullOrEmpty(targetClientId))
+            {
+                if (responseUrlOrCode != null && responseUrlOrCode.IndexOf(StoreClientId, StringComparison.OrdinalIgnoreCase) >= 0)
+                    targetClientId = StoreClientId;
+                else
+                    targetClientId = ParentalClientId;
             }
 
             string body = string.Format(
                 "client_id={0}&session_token_code={1}&session_token_code_verifier={2}",
-                Uri.EscapeDataString(ClientId),
+                Uri.EscapeDataString(targetClientId),
                 Uri.EscapeDataString(code),
                 Uri.EscapeDataString(codeVerifier));
 
@@ -169,7 +202,7 @@ namespace BackloggdAutoSync
             req.Method = "POST";
             req.ContentType = "application/x-www-form-urlencoded";
             req.Accept = "application/json";
-            req.UserAgent = MoonUserAgent;
+            req.UserAgent = targetClientId == StoreClientId ? StoreUserAgent : MoonUserAgent;
             req.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
 
             byte[] bytes = Encoding.UTF8.GetBytes(body);
@@ -466,6 +499,9 @@ namespace BackloggdAutoSync
                     ParseMonthlySummaryObject(latestRoot, device, appTitleMap, recordsByDateAndApp);
                     monthsFetched++;
 
+                    int earliestYear = latestYear;
+                    int earliestMonth = latestMonth;
+
                     ArrayList available = latestRoot.ContainsKey("available") ? latestRoot["available"] as ArrayList : null;
                     if (available != null)
                     {
@@ -477,6 +513,13 @@ namespace BackloggdAutoSync
                             int y = ym.ContainsKey("year") && ym["year"] != null ? Convert.ToInt32(ym["year"]) : 0;
                             int m = ym.ContainsKey("month") && ym["month"] != null ? Convert.ToInt32(ym["month"]) : 0;
                             if (y <= 0 || m <= 0) continue;
+
+                            if (earliestYear == 0 || y < earliestYear || (y == earliestYear && m < earliestMonth))
+                            {
+                                earliestYear = y;
+                                earliestMonth = m;
+                            }
+
                             if (y == latestYear && m == latestMonth) continue; // Already parsed from fetchLatestMonthlySummary
 
                             try
@@ -495,6 +538,35 @@ namespace BackloggdAutoSync
                             catch
                             {
                                 // Continue fetching remaining available months if one month fails
+                            }
+                        }
+                    }
+
+                    // Also probe older months prior to the 12-month UI dropdown limit (Nintendo servers keep older monthly summaries even after dropping them from 'available')
+                    if (earliestYear > 0 && earliestMonth > 0)
+                    {
+                        DateTime cursor = new DateTime(earliestYear, earliestMonth, 1);
+                        int consecutiveMisses = 0;
+                        for (int step = 0; step < 36 && consecutiveMisses < 4; step++)
+                        {
+                            cursor = cursor.AddMonths(-1);
+                            try
+                            {
+                                string monthUrl = string.Format(
+                                    "{0}/v2/actions/playSummary/fetchMonthlySummary?deviceId={1}&year={2}&month={3}&containLatest=false",
+                                    MoonBaseUrl, Uri.EscapeDataString(device.DeviceId), cursor.Year, cursor.Month);
+                                string monthJson = SendMoonGet(monthUrl, idToken);
+                                var monthRoot = serializer.Deserialize<Dictionary<string, object>>(monthJson);
+                                if (monthRoot != null)
+                                {
+                                    ParseMonthlySummaryObject(monthRoot, device, appTitleMap, recordsByDateAndApp);
+                                    monthsFetched++;
+                                    consecutiveMisses = 0;
+                                }
+                            }
+                            catch
+                            {
+                                consecutiveMisses++;
                             }
                         }
                     }
@@ -644,6 +716,156 @@ namespace BackloggdAutoSync
             int positive = Math.Abs(hash == int.MinValue ? 100000 : hash);
             if (positive < 1000) positive += 1000;
             return -positive;
+        }
+
+        public static void FetchStorePlayHistory(
+            string storeSessionToken,
+            out List<NintendoAllTimeGameRecord> allTimeGames,
+            out List<NintendoDailyGameRecord> recentDailyGames,
+            out string nickname)
+        {
+            allTimeGames = new List<NintendoAllTimeGameRecord>();
+            recentDailyGames = new List<NintendoDailyGameRecord>();
+            nickname = null;
+
+            if (string.IsNullOrWhiteSpace(storeSessionToken))
+            {
+                throw new Exception("Nintendo Store session token is empty.");
+            }
+
+            var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            string reqJson = serializer.Serialize(new Dictionary<string, string>
+            {
+                { "client_id", StoreClientId },
+                { "grant_type", GrantType },
+                { "session_token", storeSessionToken.Trim() }
+            });
+
+            HttpWebRequest tokReq = (HttpWebRequest)WebRequest.Create(TokenUrl);
+            tokReq.Method = "POST";
+            tokReq.ContentType = "application/json; charset=utf-8";
+            tokReq.Accept = "application/json";
+            tokReq.UserAgent = StoreUserAgent;
+            tokReq.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+
+            byte[] bytes = Encoding.UTF8.GetBytes(reqJson);
+            tokReq.ContentLength = bytes.Length;
+            using (Stream st = tokReq.GetRequestStream())
+            {
+                st.Write(bytes, 0, bytes.Length);
+            }
+
+            string tokenResp = ReadResponseText(tokReq);
+            var tokenDict = serializer.Deserialize<Dictionary<string, object>>(tokenResp);
+            if (tokenDict == null || !tokenDict.ContainsKey("access_token") || tokenDict["access_token"] == null)
+            {
+                throw new Exception("Failed to obtain Nintendo Store access_token: " + tokenResp);
+            }
+
+            string accessToken = Convert.ToString(tokenDict["access_token"]);
+
+            try
+            {
+                HttpWebRequest meReq = (HttpWebRequest)WebRequest.Create(MyAccountUrl);
+                meReq.Method = "GET";
+                meReq.Accept = "application/json";
+                meReq.UserAgent = StoreUserAgent;
+                meReq.Headers["Authorization"] = "Bearer " + accessToken;
+                meReq.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+                string meResp = ReadResponseText(meReq);
+                var meDict = serializer.Deserialize<Dictionary<string, object>>(meResp);
+                if (meDict != null && meDict.ContainsKey("nickname") && meDict["nickname"] != null)
+                {
+                    nickname = Convert.ToString(meDict["nickname"]);
+                }
+            }
+            catch { }
+
+            HttpWebRequest histReq = (HttpWebRequest)WebRequest.Create(StoreHistoryUrl);
+            histReq.Method = "GET";
+            histReq.Accept = "application/json";
+            histReq.UserAgent = StoreUserAgent;
+            histReq.Headers["Authorization"] = "Bearer " + accessToken;
+            histReq.Headers["gentry-locale"] = "en-US";
+            histReq.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+
+            string histJson = ReadResponseText(histReq);
+            var root = serializer.Deserialize<Dictionary<string, object>>(histJson);
+            if (root == null) return;
+
+            ArrayList playHistories = root.ContainsKey("playHistories") ? root["playHistories"] as ArrayList : null;
+            if (playHistories != null)
+            {
+                foreach (object itemObj in playHistories)
+                {
+                    Dictionary<string, object> g = itemObj as Dictionary<string, object>;
+                    if (g == null) continue;
+
+                    string titleId = g.ContainsKey("titleId") && g["titleId"] != null ? Convert.ToString(g["titleId"]).Trim() : "";
+                    string titleName = g.ContainsKey("titleName") && g["titleName"] != null ? Convert.ToString(g["titleName"]).Trim() : "";
+                    string platform = g.ContainsKey("platform") && g["platform"] != null
+                        ? Convert.ToString(g["platform"])
+                        : (g.ContainsKey("deviceType") && g["deviceType"] != null ? Convert.ToString(g["deviceType"]) : "Nintendo Switch");
+                    string firstPlayedRaw = g.ContainsKey("firstPlayedAt") && g["firstPlayedAt"] != null ? Convert.ToString(g["firstPlayedAt"]) : "";
+                    string lastPlayedRaw = g.ContainsKey("lastPlayedAt") && g["lastPlayedAt"] != null ? Convert.ToString(g["lastPlayedAt"]) : "";
+                    int totalDays = g.ContainsKey("totalPlayedDays") && g["totalPlayedDays"] != null ? Convert.ToInt32(g["totalPlayedDays"]) : 0;
+                    int totalMins = g.ContainsKey("totalPlayedMinutes") && g["totalPlayedMinutes"] != null ? Convert.ToInt32(g["totalPlayedMinutes"]) : 0;
+
+                    if (string.IsNullOrEmpty(titleName) || totalMins <= 0) continue;
+
+                    string firstDate = firstPlayedRaw.Length >= 10 ? firstPlayedRaw.Substring(0, 10) : DateTime.Today.ToString("yyyy-MM-dd");
+                    string lastDate = lastPlayedRaw.Length >= 10 ? lastPlayedRaw.Substring(0, 10) : firstDate;
+
+                    allTimeGames.Add(new NintendoAllTimeGameRecord
+                    {
+                        TitleId = titleId,
+                        TitleName = titleName,
+                        Platform = platform,
+                        FirstPlayedDate = firstDate,
+                        LastPlayedDate = lastDate,
+                        TotalPlayedDays = totalDays,
+                        TotalPlayedMinutes = totalMins
+                    });
+                }
+            }
+
+            ArrayList recentHistories = root.ContainsKey("recentPlayHistories") ? root["recentPlayHistories"] as ArrayList : null;
+            if (recentHistories != null)
+            {
+                foreach (object dayObj in recentHistories)
+                {
+                    Dictionary<string, object> dayDict = dayObj as Dictionary<string, object>;
+                    if (dayDict == null) continue;
+
+                    string playedDate = dayDict.ContainsKey("playedDate") && dayDict["playedDate"] != null ? Convert.ToString(dayDict["playedDate"]) : "";
+                    if (playedDate.Length >= 10) playedDate = playedDate.Substring(0, 10);
+                    if (string.IsNullOrEmpty(playedDate)) continue;
+
+                    ArrayList dailyList = dayDict.ContainsKey("dailyPlayHistories") ? dayDict["dailyPlayHistories"] as ArrayList : null;
+                    if (dailyList == null) continue;
+
+                    foreach (object dItemObj in dailyList)
+                    {
+                        Dictionary<string, object> dItem = dItemObj as Dictionary<string, object>;
+                        if (dItem == null) continue;
+
+                        string titleId = dItem.ContainsKey("titleId") && dItem["titleId"] != null ? Convert.ToString(dItem["titleId"]).Trim() : "";
+                        string titleName = dItem.ContainsKey("titleName") && dItem["titleName"] != null ? Convert.ToString(dItem["titleName"]).Trim() : "Switch Game";
+                        int mins = dItem.ContainsKey("totalPlayedMinutes") && dItem["totalPlayedMinutes"] != null ? Convert.ToInt32(dItem["totalPlayedMinutes"]) : 0;
+                        if (mins <= 0) continue;
+
+                        recentDailyGames.Add(new NintendoDailyGameRecord
+                        {
+                            DeviceId = "NintendoStore",
+                            DeviceLabel = "Nintendo Store Activity",
+                            DateStr = playedDate,
+                            ApplicationId = titleId,
+                            Title = titleName,
+                            PlayingTimeMinutes = mins
+                        });
+                    }
+                }
+            }
         }
 
         private static string ReadResponseText(HttpWebRequest req)

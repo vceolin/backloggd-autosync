@@ -21,6 +21,7 @@ namespace BackloggdAutoSync
 
         // Nintendo Switch Integration Settings
         public string NintendoSessionToken { get; set; }
+        public string NintendoStoreSessionToken { get; set; }
         public string NintendoAccountNickname { get; set; }
         public string NintendoAccountId { get; set; }
         public bool NintendoAutoSync { get; set; }
@@ -79,6 +80,8 @@ namespace BackloggdAutoSync
         public string EndTimeIso { get; set; }
         public int DurationSeconds { get; set; }
         public bool SetExactDayPlaytime { get; set; }
+        public int AllTimeTotalMinutes { get; set; }
+        public string FirstPlayedDate { get; set; }
         public bool Synced { get; set; }
         public bool AccumulatedOnBackloggd { get; set; }
         public int TotalDayMinutesOnBackloggd { get; set; }

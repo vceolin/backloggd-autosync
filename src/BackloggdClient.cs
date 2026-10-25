@@ -746,7 +746,7 @@ namespace BackloggdAutoSync
                 return result;
             }
 
-            if (entries.Count == 1)
+            if (entries.Count == 1 && entries[0].AllTimeTotalMinutes <= 0)
             {
                 var single = entries[0];
                 return SyncSession(gameId, single.DurationSeconds, single.DateStr, settings, null, defaultPlatformId, single.SetExactDayPlaytime);
@@ -767,8 +767,15 @@ namespace BackloggdAutoSync
                 if (d.id <= nextNegativeId) nextNegativeId = d.id - 1;
             }
 
+            SessionEntry allTimeEntry = null;
             foreach (var sess in entries)
             {
+                if (sess.AllTimeTotalMinutes > 0)
+                {
+                    allTimeEntry = sess;
+                    continue;
+                }
+
                 DateTime parsedDate;
                 string dateStr = sess.DateStr;
                 if (!DateTime.TryParse(dateStr, out parsedDate))
@@ -811,14 +818,106 @@ namespace BackloggdAutoSync
                 }
             }
 
+            // Reconcile All-Time Total Minutes from Nintendo Store (playHistories) if present
+            string inferredStartDate = logStatus.StartDate;
+            if (allTimeEntry != null && allTimeEntry.AllTimeTotalMinutes > 0)
+            {
+                if (string.IsNullOrEmpty(inferredStartDate) && !string.IsNullOrEmpty(allTimeEntry.FirstPlayedDate))
+                {
+                    inferredStartDate = allTimeEntry.FirstPlayedDate;
+                }
+
+                int loggedDailyMinutes = 0;
+                int prevAllTimeIdx = -1;
+                for (int i = 0; i < existingDates.Count; i++)
+                {
+                    var d = existingDates[i];
+                    if (d.note != null && d.note.IndexOf("All-Time History", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        prevAllTimeIdx = i;
+                    }
+                    else
+                    {
+                        loggedDailyMinutes += d.hours * 60 + d.minutes;
+                    }
+                }
+
+                int remainingHistoricalMinutes = Math.Max(0, allTimeEntry.AllTimeTotalMinutes - loggedDailyMinutes);
+                if (remainingHistoricalMinutes > 0)
+                {
+                    string startStr = !string.IsNullOrEmpty(allTimeEntry.FirstPlayedDate) ? allTimeEntry.FirstPlayedDate : allTimeEntry.DateStr;
+                    DateTime parsedStart;
+                    if (!DateTime.TryParse(startStr, out parsedStart)) parsedStart = DateTime.Today;
+                    string endStr = parsedStart.AddDays(1).ToString("yyyy-MM-dd");
+
+                    int h = remainingHistoricalMinutes / 60;
+                    int m = remainingHistoricalMinutes % 60;
+                    string histNote = string.Format("All-Time History (Nintendo Store: {0}h {1}m total)",
+                        allTimeEntry.AllTimeTotalMinutes / 60, allTimeEntry.AllTimeTotalMinutes % 60);
+
+                    if (prevAllTimeIdx >= 0)
+                    {
+                        var existing = existingDates[prevAllTimeIdx];
+                        if (existing.hours != h || existing.minutes != m)
+                        {
+                            existing.hours = h;
+                            existing.minutes = m;
+                            existing.note = histNote;
+                            existing.edited = true;
+                        }
+                    }
+                    else
+                    {
+                        int sameDateIdx = existingDates.FindIndex(d => d.range_start_date == startStr);
+                        if (sameDateIdx >= 0)
+                        {
+                            var existing = existingDates[sameDateIdx];
+                            int combined = existing.hours * 60 + existing.minutes + remainingHistoricalMinutes;
+                            existing.hours = combined / 60;
+                            existing.minutes = combined % 60;
+                            existing.note = string.IsNullOrEmpty(existing.note) ? histNote : existing.note;
+                            existing.edited = true;
+                        }
+                        else
+                        {
+                            existingDates.Add(new PlayDateEntry
+                            {
+                                id = nextNegativeId--,
+                                range_start_date = startStr,
+                                range_end_date = endStr,
+                                hours = h,
+                                minutes = m,
+                                status = 5,
+                                note = histNote,
+                                edited = true,
+                                start_date = string.IsNullOrEmpty(logStatus.StartDate) ? startStr : null,
+                                tags = new List<string>()
+                            });
+                        }
+                    }
+                }
+            }
+
             List<PlayDateEntry> editedDates = existingDates.FindAll(d => d.edited);
             int totalMinsAll = 0;
             foreach (var d in existingDates)
             {
                 totalMinsAll += d.hours * 60 + d.minutes;
             }
+            if (allTimeEntry != null && allTimeEntry.AllTimeTotalMinutes > totalMinsAll)
+            {
+                totalMinsAll = allTimeEntry.AllTimeTotalMinutes;
+            }
             int ptHours = totalMinsAll / 60;
             int ptMins = totalMinsAll % 60;
+
+            if (editedDates.Count == 0 && !isNewLog && (logStatus.HoursPlayed * 60 + logStatus.MinsPlayed) >= totalMinsAll)
+            {
+                result.Success = true;
+                result.FinalDayHours = ptHours;
+                result.FinalDayMinutes = ptMins;
+                return result;
+            }
 
             var formPairs = new List<KeyValuePair<string, string>>();
             formPairs.Add(new KeyValuePair<string, string>("game_id", gameId));
@@ -829,13 +928,15 @@ namespace BackloggdAutoSync
             formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][sync_sessions]", "true"));
             formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][hours_played]", ptHours.ToString()));
             formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][mins_played]", ptMins.ToString()));
+            if (!string.IsNullOrEmpty(inferredStartDate))
+            {
+                formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][start_date]", inferredStartDate));
+            }
             if (!isNewLog)
             {
                 if (logStatus.Review != null)
                     formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][review]", logStatus.Review));
                 formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][review_spoilers]", logStatus.ReviewSpoilers ? "true" : "false"));
-                if (!string.IsNullOrEmpty(logStatus.StartDate))
-                    formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][start_date]", logStatus.StartDate));
                 if (!string.IsNullOrEmpty(logStatus.FinishDate))
                     formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][finish_date]", logStatus.FinishDate));
                 formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][is_master]", logStatus.IsMaster ? "true" : "false"));

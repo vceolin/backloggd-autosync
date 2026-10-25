@@ -392,42 +392,73 @@ namespace BackloggdAutoSync
         {
             newOrUpdatedCount = 0;
             var settings = DataStore.LoadSettings();
-            if (string.IsNullOrWhiteSpace(settings.NintendoSessionToken))
+            bool hasParentalToken = !string.IsNullOrWhiteSpace(settings.NintendoSessionToken);
+            bool hasStoreToken = !string.IsNullOrWhiteSpace(settings.NintendoStoreSessionToken);
+
+            if (!hasParentalToken && !hasStoreToken)
             {
                 return "No Nintendo Account connected yet.";
             }
 
-            string idToken, accessToken, nickname, accountId;
-            NintendoSwitchClient.RefreshTokensAndProfile(settings.NintendoSessionToken, out idToken, out accessToken, out nickname, out accountId);
-
-            if (!string.IsNullOrEmpty(nickname) && settings.NintendoAccountNickname != nickname)
-            {
-                settings.NintendoAccountNickname = nickname;
-                settings.NintendoAccountId = accountId;
-                DataStore.SaveSettings(settings);
-            }
-
-            var devices = NintendoSwitchClient.FetchOwnedDevices(idToken);
-            if (devices.Count == 0)
-            {
-                return "No Nintendo Switch consoles linked to Nintendo Switch Parental Controls on this account.";
-            }
-
             var allDailyRecords = new List<NintendoDailyGameRecord>();
+            var allTimeStoreGames = new List<NintendoAllTimeGameRecord>();
             int totalMonthsFetched = 0;
-            foreach (var dev in devices)
+            int devicesCount = 0;
+
+            if (hasParentalToken)
             {
-                if (fetchEntireHistory)
+                try
                 {
-                    int mCount;
-                    var histRecs = NintendoSwitchClient.FetchAllHistoricalMonthlySummaries(idToken, dev, out mCount);
-                    totalMonthsFetched += mCount;
-                    allDailyRecords.AddRange(histRecs);
+                    string idToken, accessToken, nickname, accountId;
+                    NintendoSwitchClient.RefreshTokensAndProfile(settings.NintendoSessionToken, out idToken, out accessToken, out nickname, out accountId);
+
+                    if (!string.IsNullOrEmpty(nickname) && settings.NintendoAccountNickname != nickname)
+                    {
+                        settings.NintendoAccountNickname = nickname;
+                        settings.NintendoAccountId = accountId;
+                        DataStore.SaveSettings(settings);
+                    }
+
+                    var devices = NintendoSwitchClient.FetchOwnedDevices(idToken);
+                    devicesCount = devices.Count;
+                    foreach (var dev in devices)
+                    {
+                        if (fetchEntireHistory)
+                        {
+                            int mCount;
+                            var histRecs = NintendoSwitchClient.FetchAllHistoricalMonthlySummaries(idToken, dev, out mCount);
+                            totalMonthsFetched += mCount;
+                            allDailyRecords.AddRange(histRecs);
+                        }
+                        else
+                        {
+                            var recs = NintendoSwitchClient.FetchDailySummaries(idToken, dev, settings.NintendoSyncDaysBack);
+                            allDailyRecords.AddRange(recs);
+                        }
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    var recs = NintendoSwitchClient.FetchDailySummaries(idToken, dev, settings.NintendoSyncDaysBack);
-                    allDailyRecords.AddRange(recs);
+                    if (!hasStoreToken) throw;
+                    DataStore.Log("Parental Controls sync warning: " + ex.Message);
+                }
+            }
+
+            if (hasStoreToken)
+            {
+                List<NintendoAllTimeGameRecord> storeGames;
+                List<NintendoDailyGameRecord> storeDaily;
+                string storeNick;
+                NintendoSwitchClient.FetchStorePlayHistory(settings.NintendoStoreSessionToken, out storeGames, out storeDaily, out storeNick);
+                if (!string.IsNullOrEmpty(storeNick) && string.IsNullOrEmpty(settings.NintendoAccountNickname))
+                {
+                    settings.NintendoAccountNickname = storeNick;
+                    DataStore.SaveSettings(settings);
+                }
+                if (storeDaily != null) allDailyRecords.AddRange(storeDaily);
+                if (fetchEntireHistory && storeGames != null)
+                {
+                    allTimeStoreGames.AddRange(storeGames);
                 }
             }
 
@@ -443,11 +474,11 @@ namespace BackloggdAutoSync
 
                 var existingSession = sessions.Find(s =>
                     s.DateStr == rec.DateStr &&
+                    s.AllTimeTotalMinutes <= 0 &&
                     (s.AppId == switchAppId || (!string.IsNullOrEmpty(rec.ApplicationId) && s.SwitchApplicationId == rec.ApplicationId)));
 
                 if (existingSession != null)
                 {
-                    // Update if Nintendo reported more playtime on this date than previously recorded
                     if (durationSec > existingSession.DurationSeconds || !existingSession.Synced)
                     {
                         existingSession.DurationSeconds = Math.Max(existingSession.DurationSeconds, durationSec);
@@ -455,7 +486,7 @@ namespace BackloggdAutoSync
                         existingSession.SetExactDayPlaytime = true;
                         existingSession.Synced = false;
                         existingSession.SyncError = null;
-                        sessionIdsToSync.Add(existingSession.Id);
+                        if (!sessionIdsToSync.Contains(existingSession.Id)) sessionIdsToSync.Add(existingSession.Id);
                         newOrUpdatedCount++;
                     }
                 }
@@ -483,9 +514,83 @@ namespace BackloggdAutoSync
                 }
             }
 
+            // Reconcile All-Time Store Play History (covers all years 2017-present)
+            foreach (var g in allTimeStoreGames)
+            {
+                int switchAppId = NintendoSwitchClient.GetStableSwitchAppId(g.TitleId, g.TitleName);
+                int totalSec = g.TotalPlayedMinutes * 60;
+                if (totalSec < settings.MinSessionSeconds) continue;
+
+                // Calculate how many minutes of individual daily sessions we already have locally for this game
+                int localDailyMinutes = 0;
+                foreach (var s in sessions)
+                {
+                    if (s.AllTimeTotalMinutes <= 0 &&
+                        (s.AppId == switchAppId || (!string.IsNullOrEmpty(g.TitleId) && s.SwitchApplicationId == g.TitleId)))
+                    {
+                        localDailyMinutes += (int)Math.Round(s.DurationSeconds / 60.0);
+                    }
+                }
+
+                // Update English title on existing unmapped sessions if Nintendo Store returned a cleaner title
+                var existingMap = mappings.Find(m => m.AppId == switchAppId || (!string.IsNullOrEmpty(g.TitleId) && m.SwitchApplicationId == g.TitleId));
+                if (existingMap == null && !string.IsNullOrEmpty(g.TitleId) && !string.IsNullOrEmpty(g.TitleName))
+                {
+                    foreach (var s in sessions)
+                    {
+                        if (s.SwitchApplicationId == g.TitleId && !s.Synced)
+                        {
+                            s.GameTitle = g.TitleName;
+                        }
+                    }
+                }
+
+                int unloggedMins = Math.Max(0, g.TotalPlayedMinutes - localDailyMinutes);
+                if (unloggedMins <= 0) continue;
+
+                string allTimeId = string.Format("nx_alltime_{0}", Math.Abs(switchAppId));
+                var existingAllTime = sessions.Find(s => s.Id == allTimeId);
+                if (existingAllTime != null)
+                {
+                    if (g.TotalPlayedMinutes > existingAllTime.AllTimeTotalMinutes || !existingAllTime.Synced)
+                    {
+                        existingAllTime.AllTimeTotalMinutes = g.TotalPlayedMinutes;
+                        existingAllTime.FirstPlayedDate = g.FirstPlayedDate;
+                        existingAllTime.DateStr = g.FirstPlayedDate;
+                        existingAllTime.DurationSeconds = unloggedMins * 60;
+                        existingAllTime.Synced = false;
+                        existingAllTime.SyncError = null;
+                        if (!sessionIdsToSync.Contains(existingAllTime.Id)) sessionIdsToSync.Add(existingAllTime.Id);
+                        newOrUpdatedCount++;
+                    }
+                }
+                else
+                {
+                    var allTimeEntry = new SessionEntry
+                    {
+                        Id = allTimeId,
+                        Platform = "Switch",
+                        AppId = switchAppId,
+                        SwitchApplicationId = g.TitleId,
+                        GameTitle = (existingMap != null && !string.IsNullOrEmpty(existingMap.BackloggdTitle)) ? existingMap.BackloggdTitle : g.TitleName,
+                        BackloggdGameId = existingMap != null ? existingMap.BackloggdGameId : null,
+                        DateStr = g.FirstPlayedDate,
+                        FirstPlayedDate = g.FirstPlayedDate,
+                        StartTimeIso = g.FirstPlayedDate + "T12:00:00",
+                        EndTimeIso = g.LastPlayedDate + "T12:00:00",
+                        DurationSeconds = unloggedMins * 60,
+                        SetExactDayPlaytime = true,
+                        AllTimeTotalMinutes = g.TotalPlayedMinutes,
+                        Synced = false
+                    };
+                    sessions.Insert(0, allTimeEntry);
+                    sessionIdsToSync.Add(allTimeEntry.Id);
+                    newOrUpdatedCount++;
+                }
+            }
+
             if (sessionIdsToSync.Count > 0)
             {
-                // Sort sessions newest date first
                 sessions.Sort((a, b) => string.Compare(b.DateStr, a.DateStr, StringComparison.Ordinal));
                 DataStore.SaveSessions(sessions);
 
@@ -494,11 +599,11 @@ namespace BackloggdAutoSync
 
             if (fetchEntireHistory)
             {
-                return string.Format("Full History Sync complete across {0} console(s) ({1} monthly archive(s) + recent daily logs): {2} daily session(s) synced/updated.",
-                    devices.Count, totalMonthsFetched, newOrUpdatedCount);
+                return string.Format("Full History Sync complete ({0} monthly archive(s), {1} all-time Nintendo Store title(s)): {2} session(s) synced/updated.",
+                    totalMonthsFetched, allTimeStoreGames.Count, newOrUpdatedCount);
             }
 
-            return string.Format("Checked {0} Switch console(s): {1} daily game session(s) synced/updated.", devices.Count, newOrUpdatedCount);
+            return string.Format("Checked Switch activity: {0} daily game session(s) synced/updated.", newOrUpdatedCount);
         }
 
         public void BatchSyncSessionsByGame(List<string> sessionIds, bool allowInteractivePrompt)
@@ -533,8 +638,8 @@ namespace BackloggdAutoSync
                     List<SessionEntry> group = kv.Value;
                     SessionEntry first = group[0];
 
-                    // If only 1 date for this game, use standard SyncSessionEntryAsync
-                    if (group.Count == 1)
+                    // If only 1 regular daily date for this game, use standard SyncSessionEntryAsync
+                    if (group.Count == 1 && first.AllTimeTotalMinutes <= 0)
                     {
                         SyncSessionEntryAsync(first.Id, allowInteractivePrompt && !promptedOnce);
                         if (!first.Synced) promptedOnce = true;
