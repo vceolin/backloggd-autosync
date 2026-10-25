@@ -443,6 +443,195 @@ namespace BackloggdAutoSync
             return records;
         }
 
+        public static List<NintendoDailyGameRecord> FetchAllHistoricalMonthlySummaries(string idToken, NintendoDeviceInfo device, out int monthsFetched)
+        {
+            monthsFetched = 0;
+            var recordsByDateAndApp = new Dictionary<string, NintendoDailyGameRecord>(StringComparer.OrdinalIgnoreCase);
+            if (device == null || string.IsNullOrEmpty(device.DeviceId)) return new List<NintendoDailyGameRecord>();
+
+            var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            var appTitleMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            // 1. Fetch latest monthly summary + list of all available historical months
+            try
+            {
+                string latestUrl = MoonBaseUrl + "/v2/actions/playSummary/fetchLatestMonthlySummary?deviceId=" + Uri.EscapeDataString(device.DeviceId);
+                string latestJson = SendMoonGet(latestUrl, idToken);
+                var latestRoot = serializer.Deserialize<Dictionary<string, object>>(latestJson);
+                if (latestRoot != null)
+                {
+                    int latestYear = latestRoot.ContainsKey("year") && latestRoot["year"] != null ? Convert.ToInt32(latestRoot["year"]) : 0;
+                    int latestMonth = latestRoot.ContainsKey("month") && latestRoot["month"] != null ? Convert.ToInt32(latestRoot["month"]) : 0;
+
+                    ParseMonthlySummaryObject(latestRoot, device, appTitleMap, recordsByDateAndApp);
+                    monthsFetched++;
+
+                    ArrayList available = latestRoot.ContainsKey("available") ? latestRoot["available"] as ArrayList : null;
+                    if (available != null)
+                    {
+                        foreach (object availObj in available)
+                        {
+                            Dictionary<string, object> ym = availObj as Dictionary<string, object>;
+                            if (ym == null) continue;
+
+                            int y = ym.ContainsKey("year") && ym["year"] != null ? Convert.ToInt32(ym["year"]) : 0;
+                            int m = ym.ContainsKey("month") && ym["month"] != null ? Convert.ToInt32(ym["month"]) : 0;
+                            if (y <= 0 || m <= 0) continue;
+                            if (y == latestYear && m == latestMonth) continue; // Already parsed from fetchLatestMonthlySummary
+
+                            try
+                            {
+                                string monthUrl = string.Format(
+                                    "{0}/v2/actions/playSummary/fetchMonthlySummary?deviceId={1}&year={2}&month={3}&containLatest=false",
+                                    MoonBaseUrl, Uri.EscapeDataString(device.DeviceId), y, m);
+                                string monthJson = SendMoonGet(monthUrl, idToken);
+                                var monthRoot = serializer.Deserialize<Dictionary<string, object>>(monthJson);
+                                if (monthRoot != null)
+                                {
+                                    ParseMonthlySummaryObject(monthRoot, device, appTitleMap, recordsByDateAndApp);
+                                    monthsFetched++;
+                                }
+                            }
+                            catch
+                            {
+                                // Continue fetching remaining available months if one month fails
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore if console has no completed monthly summaries yet
+            }
+
+            // 2. Also merge all available daily summaries (covers current in-progress month + recent 60 days)
+            try
+            {
+                var recentDaily = FetchDailySummaries(idToken, device, 3650);
+                foreach (var rec in recentDaily)
+                {
+                    if (!string.IsNullOrEmpty(rec.ApplicationId) && !string.IsNullOrEmpty(rec.Title))
+                    {
+                        appTitleMap[rec.ApplicationId] = rec.Title;
+                    }
+                    string key = rec.DateStr + "|" + (!string.IsNullOrEmpty(rec.ApplicationId) ? rec.ApplicationId : rec.Title);
+                    if (!recordsByDateAndApp.ContainsKey(key) || rec.PlayingTimeMinutes > recordsByDateAndApp[key].PlayingTimeMinutes)
+                    {
+                        recordsByDateAndApp[key] = rec;
+                    }
+                }
+            }
+            catch { }
+
+            foreach (var rec in recordsByDateAndApp.Values)
+            {
+                if (!string.IsNullOrEmpty(rec.ApplicationId) && appTitleMap.ContainsKey(rec.ApplicationId))
+                {
+                    rec.Title = appTitleMap[rec.ApplicationId];
+                }
+            }
+
+            return new List<NintendoDailyGameRecord>(recordsByDateAndApp.Values);
+        }
+
+        private static void ParseMonthlySummaryObject(
+            Dictionary<string, object> root,
+            NintendoDeviceInfo device,
+            Dictionary<string, string> appTitleMap,
+            Dictionary<string, NintendoDailyGameRecord> recordsByDateAndApp)
+        {
+            Dictionary<string, object> summary = root.ContainsKey("summary") ? root["summary"] as Dictionary<string, object> : null;
+            if (summary == null) return;
+
+            Dictionary<string, object> overall = summary.ContainsKey("overall") ? summary["overall"] as Dictionary<string, object> : null;
+            if (overall != null)
+            {
+                ExtractTitlesFromRanking(overall.ContainsKey("ranking") ? overall["ranking"] as ArrayList : null, appTitleMap);
+            }
+
+            ArrayList players = summary.ContainsKey("players") ? summary["players"] as ArrayList : null;
+            if (players != null)
+            {
+                foreach (object pObj in players)
+                {
+                    Dictionary<string, object> pDict = pObj as Dictionary<string, object>;
+                    if (pDict == null) continue;
+                    Dictionary<string, object> pSum = pDict.ContainsKey("summary") ? pDict["summary"] as Dictionary<string, object> : null;
+                    if (pSum != null)
+                    {
+                        ExtractTitlesFromRanking(pSum.ContainsKey("ranking") ? pSum["ranking"] as ArrayList : null, appTitleMap);
+                    }
+                }
+            }
+
+            if (overall == null) return;
+            ArrayList dailyStats = overall.ContainsKey("dailyStats") ? overall["dailyStats"] as ArrayList : null;
+            if (dailyStats == null) return;
+
+            foreach (object dsObj in dailyStats)
+            {
+                Dictionary<string, object> dayStat = dsObj as Dictionary<string, object>;
+                if (dayStat == null) continue;
+
+                string dateStr = dayStat.ContainsKey("date") && dayStat["date"] != null ? Convert.ToString(dayStat["date"]) : null;
+                if (string.IsNullOrEmpty(dateStr)) continue;
+
+                Dictionary<string, object> gamesDict = dayStat.ContainsKey("games") ? dayStat["games"] as Dictionary<string, object> : null;
+                if (gamesDict == null || gamesDict.Count == 0) continue;
+
+                foreach (var kv in gamesDict)
+                {
+                    string appId = kv.Key;
+                    Dictionary<string, object> gStat = kv.Value as Dictionary<string, object>;
+                    if (gStat == null) continue;
+
+                    int mins = gStat.ContainsKey("totalTime") && gStat["totalTime"] != null
+                        ? Convert.ToInt32(gStat["totalTime"])
+                        : 0;
+                    if (mins <= 0) continue;
+
+                    string title = appTitleMap.ContainsKey(appId) ? appTitleMap[appId] : ("Switch Title " + appId);
+                    string recordKey = dateStr + "|" + appId;
+
+                    if (!recordsByDateAndApp.ContainsKey(recordKey) || mins > recordsByDateAndApp[recordKey].PlayingTimeMinutes)
+                    {
+                        recordsByDateAndApp[recordKey] = new NintendoDailyGameRecord
+                        {
+                            DeviceId = device.DeviceId,
+                            DeviceLabel = device.Label,
+                            DateStr = dateStr,
+                            PlayerNickname = "",
+                            ApplicationId = appId,
+                            Title = title,
+                            PlayingTimeMinutes = mins
+                        };
+                    }
+                }
+            }
+        }
+
+        private static void ExtractTitlesFromRanking(ArrayList ranking, Dictionary<string, string> appTitleMap)
+        {
+            if (ranking == null) return;
+            foreach (object rObj in ranking)
+            {
+                Dictionary<string, object> rDict = rObj as Dictionary<string, object>;
+                if (rDict == null) continue;
+                Dictionary<string, object> stat = rDict.ContainsKey("stat") ? rDict["stat"] as Dictionary<string, object> : null;
+                if (stat == null) continue;
+                Dictionary<string, object> meta = stat.ContainsKey("meta") ? stat["meta"] as Dictionary<string, object> : null;
+                if (meta == null) continue;
+
+                string appId = meta.ContainsKey("applicationId") && meta["applicationId"] != null ? Convert.ToString(meta["applicationId"]) : null;
+                string title = meta.ContainsKey("title") && meta["title"] != null ? Convert.ToString(meta["title"]).Trim() : null;
+                if (!string.IsNullOrEmpty(appId) && !string.IsNullOrEmpty(title))
+                {
+                    appTitleMap[appId] = title;
+                }
+            }
+        }
+
         public static int GetStableSwitchAppId(string switchApplicationId, string title)
         {
             // Generate a deterministic negative integer AppId for Switch titles so they never collide with positive Steam AppIDs

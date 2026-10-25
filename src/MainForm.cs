@@ -59,6 +59,7 @@ namespace BackloggdAutoSync
         private Button _btnNintendoConnect;
         private Label _lblNintendoStatus;
         private Button _btnNintendoSyncNow;
+        private Button _btnNintendoSyncAllHistory;
         private NumericUpDown _numNintendoDaysBack;
         private CheckBox _chkNintendoAutoSync;
         private DateTime _lastNintendoAutoSyncTime = DateTime.MinValue;
@@ -550,21 +551,21 @@ namespace BackloggdAutoSync
                 Location = new Point(20, 298)
             };
 
-            _btnNintendoSyncNow = CreateStyledButton("🔄 Fetch & Sync Switch Playtime Now", AccentPink, 285, 38);
+            _btnNintendoSyncNow = CreateStyledButton("🔄 Fetch & Sync Recent Playtime", AccentPink, 250, 38);
             _btnNintendoSyncNow.Location = new Point(20, 330);
             _btnNintendoSyncNow.Click += BtnNintendoSyncNow_Click;
 
             var lblDaysBack = new Label
             {
-                Text = "Days of Switch history to sync:",
-                Location = new Point(325, 340),
+                Text = "Recent days:",
+                Location = new Point(282, 340),
                 AutoSize = true
             };
 
             _numNintendoDaysBack = new NumericUpDown
             {
-                Location = new Point(525, 337),
-                Width = 70,
+                Location = new Point(372, 337),
+                Width = 65,
                 Minimum = 1,
                 Maximum = 60,
                 Value = Math.Max(1, Math.Min(60, _settings.NintendoSyncDaysBack)),
@@ -576,6 +577,10 @@ namespace BackloggdAutoSync
                 _settings.NintendoSyncDaysBack = (int)_numNintendoDaysBack.Value;
                 DataStore.SaveSettings(_settings);
             };
+
+            _btnNintendoSyncAllHistory = CreateStyledButton("📚 Sync Entire Available History (All Months/Years)", AccentBlue, 360, 38);
+            _btnNintendoSyncAllHistory.Location = new Point(455, 330);
+            _btnNintendoSyncAllHistory.Click += BtnNintendoSyncAllHistory_Click;
 
             _chkNintendoAutoSync = new CheckBox
             {
@@ -594,7 +599,7 @@ namespace BackloggdAutoSync
             {
                 lblHeader, lblDesc, lblStep1, _btnNintendoOpenLogin,
                 lblStep2, _txtNintendoAuthUrl, _btnNintendoConnect, _lblNintendoStatus,
-                lblStep3, _btnNintendoSyncNow, lblDaysBack, _numNintendoDaysBack, _chkNintendoAutoSync
+                lblStep3, _btnNintendoSyncNow, lblDaysBack, _numNintendoDaysBack, _btnNintendoSyncAllHistory, _chkNintendoAutoSync
             });
 
             page.Controls.Add(card);
@@ -677,6 +682,16 @@ namespace BackloggdAutoSync
 
         private void BtnNintendoSyncNow_Click(object sender, EventArgs e)
         {
+            RunNintendoSwitchSync(false);
+        }
+
+        private void BtnNintendoSyncAllHistory_Click(object sender, EventArgs e)
+        {
+            RunNintendoSwitchSync(true);
+        }
+
+        private void RunNintendoSwitchSync(bool fetchEntireHistory)
+        {
             if (string.IsNullOrWhiteSpace(_settings.NintendoSessionToken))
             {
                 MessageBox.Show("Please connect your Nintendo Account in Steps 1 & 2 above first.",
@@ -685,8 +700,17 @@ namespace BackloggdAutoSync
             }
 
             _btnNintendoSyncNow.Enabled = false;
-            _btnNintendoSyncNow.Text = "Fetching Switch Summaries...";
-            _lblNintendoStatus.Text = "Contacting Nintendo Switch Daily Summary service...";
+            _btnNintendoSyncAllHistory.Enabled = false;
+            if (fetchEntireHistory)
+            {
+                _btnNintendoSyncAllHistory.Text = "Fetching All Monthly Archives...";
+                _lblNintendoStatus.Text = "Fetching all archived monthly + daily summaries from Nintendo servers...";
+            }
+            else
+            {
+                _btnNintendoSyncNow.Text = "Fetching Switch Summaries...";
+                _lblNintendoStatus.Text = "Contacting Nintendo Switch Daily Summary service...";
+            }
             _lblNintendoStatus.ForeColor = TextMuted;
 
             ThreadPool.QueueUserWorkItem(_ =>
@@ -694,12 +718,14 @@ namespace BackloggdAutoSync
                 try
                 {
                     int count;
-                    string msg = _tracker.FetchAndSyncNintendoSwitchSummaries(true, out count);
+                    string msg = _tracker.FetchAndSyncNintendoSwitchSummaries(true, out count, fetchEntireHistory);
                     _lastNintendoAutoSyncTime = DateTime.Now;
                     BeginInvoke(new Action(() =>
                     {
                         _btnNintendoSyncNow.Enabled = true;
-                        _btnNintendoSyncNow.Text = "🔄 Fetch & Sync Switch Playtime Now";
+                        _btnNintendoSyncNow.Text = "🔄 Fetch & Sync Recent Playtime";
+                        _btnNintendoSyncAllHistory.Enabled = true;
+                        _btnNintendoSyncAllHistory.Text = "📚 Sync Entire Available History (All Months/Years)";
                         _lblNintendoStatus.Text = "✓ " + msg;
                         _lblNintendoStatus.ForeColor = SuccessGreen;
                         RefreshSessionsList();
@@ -711,7 +737,9 @@ namespace BackloggdAutoSync
                     BeginInvoke(new Action(() =>
                     {
                         _btnNintendoSyncNow.Enabled = true;
-                        _btnNintendoSyncNow.Text = "🔄 Fetch & Sync Switch Playtime Now";
+                        _btnNintendoSyncNow.Text = "🔄 Fetch & Sync Recent Playtime";
+                        _btnNintendoSyncAllHistory.Enabled = true;
+                        _btnNintendoSyncAllHistory.Text = "📚 Sync Entire Available History (All Months/Years)";
                         _lblNintendoStatus.Text = "✗ Switch sync error: " + ex.Message;
                         _lblNintendoStatus.ForeColor = Color.FromArgb(231, 76, 60);
                     }));
@@ -1249,20 +1277,24 @@ namespace BackloggdAutoSync
                     }
 
                     var sessions = DataStore.LoadSessions();
-                    var target = sessions.Find(x => x.Id == entry.Id);
-                    if (target != null)
+                    var idsToBatchSync = new List<string>();
+                    foreach (var x in sessions)
                     {
-                        target.BackloggdGameId = picked.GameId;
-                        target.GameTitle = picked.Title;
-                        target.Synced = false;
-                        target.SyncError = "Syncing...";
-                        DataStore.SaveSessions(sessions);
+                        if (x.Id == entry.Id || (entry.AppId != 0 && x.AppId == entry.AppId && !x.Synced))
+                        {
+                            x.BackloggdGameId = picked.GameId;
+                            x.GameTitle = picked.Title;
+                            x.Synced = false;
+                            x.SyncError = "Syncing...";
+                            idsToBatchSync.Add(x.Id);
+                        }
                     }
+                    DataStore.SaveSessions(sessions);
 
                     RefreshMappingsList();
                     RefreshSessionsList();
 
-                    ThreadPool.QueueUserWorkItem(_ => _tracker.SyncSessionEntryAsync(entry.Id, false));
+                    ThreadPool.QueueUserWorkItem(_ => _tracker.BatchSyncSessionsByGame(idsToBatchSync, false));
                     dlg.DialogResult = DialogResult.OK;
                     dlg.Close();
                 };
@@ -1516,10 +1548,9 @@ namespace BackloggdAutoSync
 
             ThreadPool.QueueUserWorkItem(_ =>
             {
-                for (int i = 0; i < pending.Count; i++)
-                {
-                    _tracker.SyncSessionEntryAsync(pending[i].Id, i == 0);
-                }
+                var ids = new List<string>();
+                foreach (var p in pending) ids.Add(p.Id);
+                _tracker.BatchSyncSessionsByGame(ids, true);
                 BeginInvoke(new Action(() =>
                 {
                     _btnSyncPending.Enabled = true;

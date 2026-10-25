@@ -736,5 +736,196 @@ namespace BackloggdAutoSync
             result.Accumulated = accumulated;
             return result;
         }
+
+        public static SyncResult SyncBatchSessionsForGame(string gameId, List<SessionEntry> entries, AppSettings settings, int defaultPlatformId = 6)
+        {
+            var result = new SyncResult { GameId = gameId };
+            if (entries == null || entries.Count == 0)
+            {
+                result.Success = true;
+                return result;
+            }
+
+            if (entries.Count == 1)
+            {
+                var single = entries[0];
+                return SyncSession(gameId, single.DurationSeconds, single.DateStr, settings, null, defaultPlatformId, single.SetExactDayPlaytime);
+            }
+
+            GameLogStatus logStatus = GetGameLogStatus(gameId, settings);
+            string defaultPtTitle = defaultPlatformId == 130 ? "Nintendo Switch" : "Windows PC";
+            bool isNewLog = !(logStatus.IsLogged && logStatus.PlaythroughId.HasValue);
+            int playthroughId = isNewLog ? -1 : logStatus.PlaythroughId.Value;
+            string playthroughTitle = (!isNewLog && !string.IsNullOrEmpty(logStatus.PlaythroughTitle)) ? logStatus.PlaythroughTitle : defaultPtTitle;
+            int platformId = (!isNewLog && logStatus.PlatformId > 0) ? logStatus.PlatformId : defaultPlatformId;
+            int rating = logStatus.Rating;
+            List<PlayDateEntry> existingDates = new List<PlayDateEntry>(logStatus.PlayDates);
+
+            int nextNegativeId = -(existingDates.Count + 1);
+            foreach (var d in existingDates)
+            {
+                if (d.id <= nextNegativeId) nextNegativeId = d.id - 1;
+            }
+
+            foreach (var sess in entries)
+            {
+                DateTime parsedDate;
+                string dateStr = sess.DateStr;
+                if (!DateTime.TryParse(dateStr, out parsedDate))
+                {
+                    parsedDate = DateTime.Today;
+                    dateStr = parsedDate.ToString("yyyy-MM-dd");
+                }
+                string nextDayStr = parsedDate.AddDays(1).ToString("yyyy-MM-dd");
+
+                int addHours = sess.DurationSeconds / 3600;
+                int addMins = (int)Math.Round((sess.DurationSeconds % 3600) / 60.0);
+                if (addMins == 60) { addHours += 1; addMins = 0; }
+                if (addHours == 0 && addMins == 0 && sess.DurationSeconds >= 30) addMins = 1;
+
+                int existingIdx = existingDates.FindIndex(d => d.range_start_date == dateStr);
+                if (existingIdx >= 0)
+                {
+                    PlayDateEntry existing = existingDates[existingIdx];
+                    int totalMinutes = sess.SetExactDayPlaytime
+                        ? Math.Max(existing.hours * 60 + existing.minutes, addHours * 60 + addMins)
+                        : (existing.hours * 60 + existing.minutes + addHours * 60 + addMins);
+                    existing.hours = totalMinutes / 60;
+                    existing.minutes = totalMinutes % 60;
+                    existing.edited = true;
+                }
+                else
+                {
+                    existingDates.Add(new PlayDateEntry
+                    {
+                        id = nextNegativeId--,
+                        range_start_date = dateStr,
+                        range_end_date = nextDayStr,
+                        hours = addHours,
+                        minutes = addMins,
+                        status = 5,
+                        note = "",
+                        edited = true,
+                        tags = new List<string>()
+                    });
+                }
+            }
+
+            List<PlayDateEntry> editedDates = existingDates.FindAll(d => d.edited);
+            int totalMinsAll = 0;
+            foreach (var d in existingDates)
+            {
+                totalMinsAll += d.hours * 60 + d.minutes;
+            }
+            int ptHours = totalMinsAll / 60;
+            int ptMins = totalMinsAll % 60;
+
+            var formPairs = new List<KeyValuePair<string, string>>();
+            formPairs.Add(new KeyValuePair<string, string>("game_id", gameId));
+            formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][id]", playthroughId.ToString()));
+            formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][title]", playthroughTitle));
+            formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][platform]", platformId.ToString()));
+            formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][rating]", rating.ToString()));
+            formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][sync_sessions]", "true"));
+            formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][hours_played]", ptHours.ToString()));
+            formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][mins_played]", ptMins.ToString()));
+            if (!isNewLog)
+            {
+                if (logStatus.Review != null)
+                    formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][review]", logStatus.Review));
+                formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][review_spoilers]", logStatus.ReviewSpoilers ? "true" : "false"));
+                if (!string.IsNullOrEmpty(logStatus.StartDate))
+                    formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][start_date]", logStatus.StartDate));
+                if (!string.IsNullOrEmpty(logStatus.FinishDate))
+                    formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][finish_date]", logStatus.FinishDate));
+                formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][is_master]", logStatus.IsMaster ? "true" : "false"));
+                formPairs.Add(new KeyValuePair<string, string>("playthroughs[0][is_replay]", logStatus.IsReplay ? "true" : "false"));
+            }
+
+            string ptKey = playthroughId.ToString();
+            for (int i = 0; i < editedDates.Count; i++)
+            {
+                var d = editedDates[i];
+                string prefix = string.Format("dates[{0}][{1}]", ptKey, i);
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[id]", d.id.ToString()));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[range_start_date]", d.range_start_date ?? ""));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[range_end_date]", d.range_end_date ?? ""));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[hours]", d.hours.ToString()));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[minutes]", d.minutes.ToString()));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[status]", d.status != null ? Convert.ToString(d.status) : ""));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[note]", d.note ?? ""));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[edited]", d.edited ? "true" : "false"));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[start_date]", d.start_date ?? ""));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[finish_date]", d.finish_date ?? ""));
+                formPairs.Add(new KeyValuePair<string, string>(prefix + "[privacy]", d.privacy != null ? Convert.ToString(d.privacy) : ""));
+                if (d.tags != null)
+                {
+                    foreach (var tag in d.tags)
+                    {
+                        formPairs.Add(new KeyValuePair<string, string>(prefix + "[tags][]", tag));
+                    }
+                }
+            }
+
+            formPairs.Add(new KeyValuePair<string, string>("log[id]", (!isNewLog && logStatus.GameLogId.HasValue) ? logStatus.GameLogId.Value.ToString() : ""));
+            formPairs.Add(new KeyValuePair<string, string>("log[status]", !string.IsNullOrEmpty(logStatus.Status) ? logStatus.Status : "playing"));
+            formPairs.Add(new KeyValuePair<string, string>("log[is_play]", logStatus.IsPlay ? "true" : "false"));
+            formPairs.Add(new KeyValuePair<string, string>("log[is_playing]", (isNewLog || (!logStatus.IsPlay && !logStatus.IsPlaying)) ? "true" : (logStatus.IsPlaying ? "true" : "false")));
+            formPairs.Add(new KeyValuePair<string, string>("log[is_backlog]", logStatus.IsBacklog ? "true" : "false"));
+            formPairs.Add(new KeyValuePair<string, string>("log[is_wishlist]", logStatus.IsWishlist ? "true" : "false"));
+            formPairs.Add(new KeyValuePair<string, string>("log[game_liked]", logStatus.GameLiked ? "true" : "false"));
+            formPairs.Add(new KeyValuePair<string, string>("modal_type", "full"));
+
+            var sb = new StringBuilder();
+            for (int i = 0; i < formPairs.Count; i++)
+            {
+                if (i > 0) sb.Append("&");
+                sb.Append(Uri.EscapeDataString(formPairs[i].Key));
+                sb.Append("=");
+                sb.Append(Uri.EscapeDataString(formPairs[i].Value ?? ""));
+            }
+            string formBody = sb.ToString();
+
+            string saveUrl = !string.IsNullOrEmpty(settings.UserId)
+                ? string.Format("{0}/api/user/{1}/log/{2}", BaseUrl, settings.UserId, gameId)
+                : string.Format("{0}/native/log/{1}", BaseUrl, gameId);
+
+            string cleanCookie = NormalizeCookie(settings.SessionCookie);
+            var headers = new Dictionary<string, string>
+            {
+                { "Content-Type", "application/x-www-form-urlencoded; charset=UTF-8" },
+                { "Accept", "application/json, text/javascript, */*; q=0.01" },
+                { "X-Requested-With", "XMLHttpRequest" }
+            };
+            if (!string.IsNullOrEmpty(settings.CsrfToken))
+            {
+                headers["X-CSRF-Token"] = settings.CsrfToken;
+            }
+
+            var res = SendRequest(saveUrl, "POST", cleanCookie, headers, formBody);
+            if (res.StatusCode == 422 || res.StatusCode == 401 || res.StatusCode == 403)
+            {
+                string freshCsrf = FetchFreshCsrfToken(cleanCookie);
+                if (!string.IsNullOrEmpty(freshCsrf))
+                {
+                    settings.CsrfToken = freshCsrf;
+                    DataStore.SaveSettings(settings);
+                    headers["X-CSRF-Token"] = freshCsrf;
+                    res = SendRequest(saveUrl, "POST", cleanCookie, headers, formBody);
+                }
+            }
+
+            if (!res.Ok)
+            {
+                result.Success = false;
+                result.Error = string.Format("Backloggd batch save failed (HTTP {0}): {1}", res.StatusCode, res.Error ?? (res.Body != null && res.Body.Length > 120 ? res.Body.Substring(0, 120) : res.Body));
+                return result;
+            }
+
+            result.Success = true;
+            result.FinalDayHours = ptHours;
+            result.FinalDayMinutes = ptMins;
+            return result;
+        }
     }
 }
