@@ -1,0 +1,7 @@
+# Never commit local user data, session cookies, or logs!
+data/
+*.log
+
+# Build artifacts / temporary files
+*.pdb
+*.user
