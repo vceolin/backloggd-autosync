@@ -287,7 +287,7 @@ namespace BackloggdAutoSync
             }
 
             string html = res.Body ?? "";
-            MatchCollection matches = Regex.Matches(html, @"<a\s+href=[""']/native/log/edit/(\d+)[""'][^>]*>([\s\S]*?)</a>", RegexOptions.IgnoreCase);
+            MatchCollection matches = Regex.Matches(html, @"<a\s+href=[""']/native/log/edit/(\d+)/?[""'][^>]*>([\s\S]*?)</a>", RegexOptions.IgnoreCase);
             foreach (Match m in matches)
             {
                 string gameId = m.Groups[1].Value;
