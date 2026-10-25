@@ -95,13 +95,15 @@ namespace BackloggdAutoSync
 
             RefreshSessionsList();
             RefreshMappingsList();
-            PopulateInstalledSteamGamesDropdown();
             UpdateAccountBadge();
 
             _pollTimer = new System.Windows.Forms.Timer();
-            _pollTimer.Interval = 2000;
+            _pollTimer.Interval = 60000; // Lightweight: poll once every 60 seconds (1 minute)
             _pollTimer.Tick += PollTimer_Tick;
             _pollTimer.Start();
+
+            // Run one initial check on startup
+            PollTimer_Tick(this, EventArgs.Empty);
 
             if (startMinimized || _settings.StartMinimized)
             {
@@ -167,6 +169,7 @@ namespace BackloggdAutoSync
             Show();
             WindowState = FormWindowState.Normal;
             ShowInTaskbar = true;
+            UpdateLiveStatusUi();
             Activate();
         }
 
@@ -242,6 +245,13 @@ namespace BackloggdAutoSync
             _tabControl.TabPages.Add(tabSessions);
             _tabControl.TabPages.Add(tabMappings);
             _tabControl.TabPages.Add(tabSettings);
+            _tabControl.SelectedIndexChanged += (s, e) =>
+            {
+                if (_tabControl.SelectedIndex == 1 && _cmbInstalledGames.Items.Count == 0)
+                {
+                    PopulateInstalledSteamGamesDropdown();
+                }
+            };
 
             this.Controls.Add(_tabControl);
             this.Controls.Add(_headerPanel);
@@ -1021,24 +1031,34 @@ namespace BackloggdAutoSync
         private void PollTimer_Tick(object sender, EventArgs e)
         {
             _tracker.Poll(_settings);
+            UpdateLiveStatusUi();
+        }
 
+        private void UpdateLiveStatusUi()
+        {
             if (_tracker.CurrentAppId > 0)
             {
                 string dur = FormatDuration(_tracker.CurrentElapsedSeconds);
-                _lblLiveStatus.Text = string.Format("Playing: {0}  ({1})", _tracker.CurrentTitle, dur);
-                _lblLiveStatus.ForeColor = SuccessGreen;
-                _lblLiveTimer.Text = string.Format("Steam AppID: {0}  •  Started at {1:HH:mm:ss}  •  Will auto-sync on exit",
-                    _tracker.CurrentAppId, _tracker.SessionStart);
-
                 string trayText = string.Format("Playing: {0} ({1})", _tracker.CurrentTitle, dur);
                 _trayIcon.Text = trayText.Length > 63 ? trayText.Substring(0, 63) : trayText;
+
+                if (this.Visible && this.WindowState != FormWindowState.Minimized)
+                {
+                    _lblLiveStatus.Text = string.Format("Playing: {0}  ({1})", _tracker.CurrentTitle, dur);
+                    _lblLiveStatus.ForeColor = SuccessGreen;
+                    _lblLiveTimer.Text = string.Format("Steam AppID: {0}  •  Started at {1:HH:mm}  •  Checks every 1 min",
+                        _tracker.CurrentAppId, _tracker.SessionStart);
+                }
             }
             else
             {
-                _lblLiveStatus.Text = "Idle — Waiting for a Steam game to launch...";
-                _lblLiveStatus.ForeColor = TextLight;
-                _lblLiveTimer.Text = "Monitoring Steam actively in the background (close window to minimize to tray)";
                 _trayIcon.Text = "Backloggd AutoSync — Idle";
+                if (this.Visible && this.WindowState != FormWindowState.Minimized)
+                {
+                    _lblLiveStatus.Text = "Idle — Waiting for a Steam game to launch...";
+                    _lblLiveStatus.ForeColor = TextLight;
+                    _lblLiveTimer.Text = "Lightweight mode: checks Steam once per minute (close window to minimize to tray)";
+                }
             }
         }
 
