@@ -33,7 +33,102 @@ namespace BackloggdAutoSync
         private ToolStripMenuItem _trayStatusItem;
         private bool _allowClose = false;
         private bool _suppressSearchTextChanged = false;
+        private bool _suppressMappingSelectionChanged = false;
         private int _searchRequestSeq = 0;
+
+        private class ListViewStateSnapshot
+        {
+            public HashSet<string> SelectedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            public string FocusedKey = null;
+            public int TopIndex = -1;
+            public string TopKey = null;
+        }
+
+        private static ListViewStateSnapshot CaptureListViewState(ListView lv, Func<ListViewItem, string> keySelector)
+        {
+            var snap = new ListViewStateSnapshot();
+            if (lv == null || lv.Items.Count == 0) return snap;
+
+            try
+            {
+                if (lv.IsHandleCreated)
+                {
+                    var topItem = lv.TopItem;
+                    if (topItem != null)
+                    {
+                        snap.TopIndex = topItem.Index;
+                        snap.TopKey = keySelector(topItem);
+                    }
+                }
+            }
+            catch { }
+
+            foreach (ListViewItem sel in lv.SelectedItems)
+            {
+                string k = keySelector(sel);
+                if (!string.IsNullOrEmpty(k)) snap.SelectedKeys.Add(k);
+            }
+
+            if (lv.FocusedItem != null)
+            {
+                snap.FocusedKey = keySelector(lv.FocusedItem);
+            }
+
+            return snap;
+        }
+
+        private static void RestoreListViewState(ListView lv, ListViewStateSnapshot snap, Func<ListViewItem, string> keySelector)
+        {
+            if (lv == null || snap == null || lv.Items.Count == 0) return;
+
+            foreach (ListViewItem item in lv.Items)
+            {
+                string k = keySelector(item);
+                if (string.IsNullOrEmpty(k)) continue;
+
+                if (snap.SelectedKeys.Contains(k))
+                {
+                    item.Selected = true;
+                }
+                if (!string.IsNullOrEmpty(snap.FocusedKey) && string.Equals(k, snap.FocusedKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    item.Focused = true;
+                }
+            }
+        }
+
+        private static void RestoreListViewScrollPosition(ListView lv, ListViewStateSnapshot snap, Func<ListViewItem, string> keySelector)
+        {
+            if (lv == null || snap == null || lv.Items.Count == 0) return;
+            try
+            {
+                if (!lv.IsHandleCreated || snap.TopIndex < 0) return;
+
+                int targetIdx = -1;
+                if (!string.IsNullOrEmpty(snap.TopKey))
+                {
+                    for (int i = 0; i < lv.Items.Count; i++)
+                    {
+                        if (string.Equals(keySelector(lv.Items[i]), snap.TopKey, StringComparison.OrdinalIgnoreCase))
+                        {
+                            targetIdx = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (targetIdx < 0)
+                {
+                    targetIdx = Math.Min(snap.TopIndex, lv.Items.Count - 1);
+                }
+
+                if (targetIdx > 0 && targetIdx < lv.Items.Count)
+                {
+                    lv.TopItem = lv.Items[targetIdx];
+                }
+            }
+            catch { }
+        }
 
         // Top Banner Controls
         private Panel _headerPanel;
@@ -651,8 +746,8 @@ namespace BackloggdAutoSync
                     {
                         _btnScanCollection.Enabled = true;
                         _btnScanCollection.Text = "🔍 Scan Owned Games";
-                        RefreshCollectionList();
                         RefreshMappingsList();
+                        if (!_collectionLoadedOnce) RefreshCollectionList();
                     }));
                 }
             });
@@ -694,6 +789,13 @@ namespace BackloggdAutoSync
             int totalSwitch = 0;
             int totalMapped = 0;
             int totalSynced = 0;
+
+            Func<ListViewItem, string> getCollectionKey = lvi =>
+            {
+                var ce = lvi != null ? lvi.Tag as CollectionEntry : null;
+                return ce != null ? ce.Id : null;
+            };
+            var stateSnap = CaptureListViewState(_lvCollection, getCollectionKey);
 
             _lvCollection.BeginUpdate();
             _lvCollection.Items.Clear();
@@ -796,7 +898,9 @@ namespace BackloggdAutoSync
                 _lvCollection.Items.Add(item);
             }
 
+            RestoreListViewState(_lvCollection, stateSnap, getCollectionKey);
             _lvCollection.EndUpdate();
+            RestoreListViewScrollPosition(_lvCollection, stateSnap, getCollectionKey);
 
             _lblCollectionSummary.Text = string.Format(
                 "Collection: {0} owned ({1} Steam, {2} Switch)  •  {3} mapped  •  {4} synced to Backloggd Library  (Showing {5})",
@@ -822,8 +926,8 @@ namespace BackloggdAutoSync
                 selected,
                 (updatedEntry, syncImmediately) =>
                 {
-                    RefreshCollectionList();
                     RefreshMappingsList();
+                    if (!_collectionLoadedOnce) RefreshCollectionList();
                     RefreshSessionsList();
 
                     if (syncImmediately && !string.IsNullOrEmpty(updatedEntry.BackloggdGameId))
@@ -997,8 +1101,8 @@ namespace BackloggdAutoSync
                     {
                         _btnAutoMatchCollection.Enabled = true;
                         _btnAutoMatchCollection.Text = "✨ Auto-Match Unmapped";
-                        RefreshCollectionList();
                         RefreshMappingsList();
+                        if (!_collectionLoadedOnce) RefreshCollectionList();
                         MessageBox.Show(
                             string.Format("Auto-match complete!\r\n• Matched {0} of {1} game(s) to Backloggd.", matched, total),
                             "Collection Auto-Match", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1275,6 +1379,7 @@ namespace BackloggdAutoSync
             _lvMappings.Columns.Add("Match Type", 120);
             _lvMappings.SelectedIndexChanged += (s, e) =>
             {
+                if (_suppressMappingSelectionChanged) return;
                 if (_lvMappings.SelectedItems.Count > 0)
                 {
                     var item = _lvMappings.SelectedItems[0];
@@ -2065,6 +2170,13 @@ namespace BackloggdAutoSync
             int todaySeconds = 0;
             var todayGames = new HashSet<int>();
 
+            Func<ListViewItem, string> getSessionKey = lvi =>
+            {
+                var se = lvi != null ? lvi.Tag as SessionEntry : null;
+                return se != null ? se.Id : null;
+            };
+            var stateSnap = CaptureListViewState(_lvSessions, getSessionKey);
+
             _lvSessions.BeginUpdate();
             _lvSessions.Items.Clear();
 
@@ -2107,7 +2219,10 @@ namespace BackloggdAutoSync
 
                 _lvSessions.Items.Add(item);
             }
+
+            RestoreListViewState(_lvSessions, stateSnap, getSessionKey);
             _lvSessions.EndUpdate();
+            RestoreListViewScrollPosition(_lvSessions, stateSnap, getSessionKey);
 
             _lblTodaySummary.Text = string.Format("Today ({0}): {1} played across {2} game(s)",
                 todayStr, FormatDuration(todaySeconds), todayGames.Count);
@@ -2116,6 +2231,14 @@ namespace BackloggdAutoSync
         private void RefreshMappingsList()
         {
             var mappings = DataStore.LoadMappings();
+            Func<ListViewItem, string> getMappingKey = lvi =>
+            {
+                var gm = lvi != null ? lvi.Tag as GameMapping : null;
+                return gm != null ? gm.AppId.ToString() : null;
+            };
+            var stateSnap = CaptureListViewState(_lvMappings, getMappingKey);
+
+            _suppressMappingSelectionChanged = true;
             _lvMappings.BeginUpdate();
             _lvMappings.Items.Clear();
             foreach (var m in mappings)
@@ -2128,7 +2251,10 @@ namespace BackloggdAutoSync
                 item.SubItems.Add(m.ManualOverride ? "Manual" : "Auto-Matched");
                 _lvMappings.Items.Add(item);
             }
+            RestoreListViewState(_lvMappings, stateSnap, getMappingKey);
             _lvMappings.EndUpdate();
+            RestoreListViewScrollPosition(_lvMappings, stateSnap, getMappingKey);
+            _suppressMappingSelectionChanged = false;
 
             if (_collectionLoadedOnce && _lvCollection != null)
             {
