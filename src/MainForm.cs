@@ -66,13 +66,10 @@ namespace BackloggdAutoSync
         // Tab 3: Nintendo Switch Sync
         private NintendoLoginChallenge _nintendoChallenge;
         private Button _btnNintendoOpenLogin;
-        private Button _btnNintendoOpenStoreLogin;
         private TextBox _txtNintendoAuthUrl;
         private Button _btnNintendoConnect;
         private Label _lblNintendoStatus;
         private Button _btnNintendoSyncNow;
-        private Button _btnNintendoSyncAllHistory;
-        private NumericUpDown _numNintendoDaysBack;
         private CheckBox _chkNintendoAutoSync;
         private DateTime _lastNintendoAutoSyncTime = DateTime.MinValue;
 
@@ -597,7 +594,7 @@ namespace BackloggdAutoSync
 
             var lblHeader = new Label
             {
-                Text = "Nintendo Switch / Switch 2 — Official Daily Play Summary Sync",
+                Text = "Nintendo Switch / Switch 2 — Official Daily Game History Sync",
                 Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
                 ForeColor = TextLight,
                 AutoSize = true,
@@ -606,9 +603,8 @@ namespace BackloggdAutoSync
 
             var lblDesc = new Label
             {
-                Text = "Syncs your exact daily minutes per game directly from Nintendo's servers — works on stock Switch consoles even when your PC is off!\r\n" +
-                       "Note: Your Switch must be linked to the free 'Nintendo Switch Parental Controls' app on your Nintendo Account (you can set\r\n" +
-                       "Restriction Level to 'None' so it never restricts your console—it just unlocks official daily playtime tracking per game!).",
+                Text = "Syncs your exact day-by-day minutes per game across all Switch 1 & Switch 2 titles (2017–present) directly from\r\n" +
+                       "Nintendo's official Game History API — works automatically on any Nintendo Account with no Parental Controls setup required!",
                 ForeColor = TextMuted,
                 AutoSize = true,
                 Location = new Point(20, 44)
@@ -616,20 +612,16 @@ namespace BackloggdAutoSync
 
             var lblStep1 = new Label
             {
-                Text = "Step 1: Open Nintendo sign-in (use 1a for Daily/Monthly Calendar, and 1b for All-Time 2017–Present Nintendo Store History):",
+                Text = "Step 1: Click below to open Nintendo Account sign-in in your browser:",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = TextLight,
                 AutoSize = true,
-                Location = new Point(20, 114)
+                Location = new Point(20, 102)
             };
 
-            _btnNintendoOpenLogin = CreateStyledButton("1a. Open Daily/Monthly Login (Parental App)", AccentBlue, 310, 34);
-            _btnNintendoOpenLogin.Location = new Point(20, 140);
-            _btnNintendoOpenLogin.Click += BtnNintendoOpenLogin_Click;
-
-            _btnNintendoOpenStoreLogin = CreateStyledButton("1b. Open Nintendo Store Login (All-Time History)", AccentPink, 350, 34);
-            _btnNintendoOpenStoreLogin.Location = new Point(345, 140);
-            _btnNintendoOpenStoreLogin.Click += BtnNintendoOpenStoreLogin_Click;
+            _btnNintendoOpenLogin = CreateStyledButton("1. Open Nintendo Account Sign-In", AccentBlue, 280, 34);
+            _btnNintendoOpenLogin.Location = new Point(20, 128);
+            _btnNintendoOpenLogin.Click += BtnNintendoOpenStoreLogin_Click;
 
             var lblStep2 = new Label
             {
@@ -637,12 +629,12 @@ namespace BackloggdAutoSync
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = TextLight,
                 AutoSize = true,
-                Location = new Point(20, 188)
+                Location = new Point(20, 178)
             };
 
             _txtNintendoAuthUrl = new TextBox
             {
-                Location = new Point(20, 214),
+                Location = new Point(20, 204),
                 Width = 600,
                 BackColor = BgInput,
                 ForeColor = TextLight,
@@ -650,16 +642,16 @@ namespace BackloggdAutoSync
             };
 
             _btnNintendoConnect = CreateStyledButton("2. Connect Nintendo Account", AccentPink, 220, 30);
-            _btnNintendoConnect.Location = new Point(632, 211);
+            _btnNintendoConnect.Location = new Point(632, 201);
             _btnNintendoConnect.Click += BtnNintendoConnect_Click;
 
             _lblNintendoStatus = new Label
             {
                 Text = GetNintendoConnectionStatusText(),
-                ForeColor = (!string.IsNullOrEmpty(_settings.NintendoSessionToken) || !string.IsNullOrEmpty(_settings.NintendoStoreSessionToken)) ? SuccessGreen : TextMuted,
+                ForeColor = !string.IsNullOrEmpty(_settings.NintendoStoreSessionToken) ? SuccessGreen : TextMuted,
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 AutoSize = true,
-                Location = new Point(20, 254)
+                Location = new Point(20, 244)
             };
 
             var lblStep3 = new Label
@@ -668,45 +660,18 @@ namespace BackloggdAutoSync
                 Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
                 ForeColor = TextLight,
                 AutoSize = true,
-                Location = new Point(20, 298)
+                Location = new Point(20, 288)
             };
 
-            _btnNintendoSyncNow = CreateStyledButton("🔄 Fetch & Sync Recent Playtime", AccentPink, 250, 38);
-            _btnNintendoSyncNow.Location = new Point(20, 330);
+            _btnNintendoSyncNow = CreateStyledButton("🔄 Sync Nintendo Switch Playtime Now", AccentPink, 310, 38);
+            _btnNintendoSyncNow.Location = new Point(20, 320);
             _btnNintendoSyncNow.Click += BtnNintendoSyncNow_Click;
-
-            var lblDaysBack = new Label
-            {
-                Text = "Recent days:",
-                Location = new Point(282, 340),
-                AutoSize = true
-            };
-
-            _numNintendoDaysBack = new NumericUpDown
-            {
-                Location = new Point(372, 337),
-                Width = 65,
-                Minimum = 1,
-                Maximum = 60,
-                Value = Math.Max(1, Math.Min(60, _settings.NintendoSyncDaysBack)),
-                BackColor = BgInput,
-                ForeColor = TextLight
-            };
-            _numNintendoDaysBack.ValueChanged += (s, e) =>
-            {
-                _settings.NintendoSyncDaysBack = (int)_numNintendoDaysBack.Value;
-                DataStore.SaveSettings(_settings);
-            };
-
-            _btnNintendoSyncAllHistory = CreateStyledButton("📚 Sync Entire Available History (All Months/Years)", AccentBlue, 360, 38);
-            _btnNintendoSyncAllHistory.Location = new Point(455, 330);
-            _btnNintendoSyncAllHistory.Click += BtnNintendoSyncAllHistory_Click;
 
             _chkNintendoAutoSync = new CheckBox
             {
-                Text = "Automatically check & sync Nintendo Switch daily playtime every 30 minutes in the background",
+                Text = "Automatically check & sync Nintendo Switch daily playtime once a day in the background",
                 Checked = _settings.NintendoAutoSync,
-                Location = new Point(20, 384),
+                Location = new Point(20, 374),
                 AutoSize = true
             };
             _chkNintendoAutoSync.CheckedChanged += (s, e) =>
@@ -717,9 +682,9 @@ namespace BackloggdAutoSync
 
             card.Controls.AddRange(new Control[]
             {
-                lblHeader, lblDesc, lblStep1, _btnNintendoOpenLogin, _btnNintendoOpenStoreLogin,
+                lblHeader, lblDesc, lblStep1, _btnNintendoOpenLogin,
                 lblStep2, _txtNintendoAuthUrl, _btnNintendoConnect, _lblNintendoStatus,
-                lblStep3, _btnNintendoSyncNow, lblDaysBack, _numNintendoDaysBack, _btnNintendoSyncAllHistory, _chkNintendoAutoSync
+                lblStep3, _btnNintendoSyncNow, _chkNintendoAutoSync
             });
 
             page.Controls.Add(card);
@@ -727,36 +692,11 @@ namespace BackloggdAutoSync
 
         private string GetNintendoConnectionStatusText()
         {
-            bool hasParental = !string.IsNullOrEmpty(_settings.NintendoSessionToken);
-            bool hasStore = !string.IsNullOrEmpty(_settings.NintendoStoreSessionToken);
-            if (hasParental && hasStore)
+            if (!string.IsNullOrEmpty(_settings.NintendoStoreSessionToken))
             {
-                return string.Format("✓ Connected as {0} (Daily Calendar + Nintendo Store All-Time History both active!)", _settings.NintendoAccountNickname ?? "Linked");
-            }
-            if (hasParental)
-            {
-                return string.Format("✓ Daily Calendar connected ({0}) — Click '1b. Open Nintendo Store Login' above to also unlock All-Time (2017–Present) History!", _settings.NintendoAccountNickname ?? "Linked");
-            }
-            if (hasStore)
-            {
-                return string.Format("✓ Nintendo Store All-Time History connected ({0})", _settings.NintendoAccountNickname ?? "Linked");
+                return string.Format("✓ Connected to Nintendo Account ({0})", _settings.NintendoAccountNickname ?? "Linked");
             }
             return "Not connected to Nintendo Account yet.";
-        }
-
-        private void BtnNintendoOpenLogin_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                _nintendoChallenge = NintendoSwitchClient.CreateLoginChallenge(false);
-                Process.Start(_nintendoChallenge.LoginUrl);
-                _lblNintendoStatus.Text = "Browser opened (Daily/Monthly Calendar)! Sign in, right-click 'Select this person' -> 'Copy link address', and paste in Step 2.";
-                _lblNintendoStatus.ForeColor = WarnOrange;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Failed to open browser: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
         }
 
         private void BtnNintendoOpenStoreLogin_Click(object sender, EventArgs e)
@@ -765,7 +705,7 @@ namespace BackloggdAutoSync
             {
                 _nintendoChallenge = NintendoSwitchClient.CreateLoginChallenge(true);
                 Process.Start(_nintendoChallenge.LoginUrl);
-                _lblNintendoStatus.Text = "Browser opened (Nintendo Store All-Time History)! Sign in, right-click 'Select this person' -> 'Copy link address', and paste in Step 2.";
+                _lblNintendoStatus.Text = "Browser opened! Sign in, right-click 'Select this person' -> 'Copy link address', and paste in Step 2.";
                 _lblNintendoStatus.ForeColor = WarnOrange;
             }
             catch (Exception ex)
@@ -778,7 +718,7 @@ namespace BackloggdAutoSync
         {
             if (_nintendoChallenge == null || string.IsNullOrEmpty(_nintendoChallenge.CodeVerifier))
             {
-                MessageBox.Show("Please click '1a' or '1b' above first so a login challenge is generated.",
+                MessageBox.Show("Please click '1. Open Nintendo Account Sign-In' above first so a login challenge is generated.",
                     "Step 1 Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -803,48 +743,24 @@ namespace BackloggdAutoSync
                 try
                 {
                     string sessionToken = NintendoSwitchClient.ExchangeCodeForSessionToken(pasted, verifier, clientId);
-                    if (clientId == NintendoSwitchClient.StoreClientId || pasted.IndexOf(NintendoSwitchClient.StoreClientId, StringComparison.OrdinalIgnoreCase) >= 0)
+                    List<NintendoAllTimeGameRecord> allTime;
+                    List<NintendoDailyGameRecord> recent;
+                    string nick;
+                    NintendoSwitchClient.FetchStorePlayHistory(sessionToken, out allTime, out recent, out nick);
+                    _settings.NintendoStoreSessionToken = sessionToken;
+                    if (!string.IsNullOrEmpty(nick)) _settings.NintendoAccountNickname = nick;
+                    DataStore.SaveSettings(_settings);
+
+                    BeginInvoke(new Action(() =>
                     {
-                        List<NintendoAllTimeGameRecord> allTime;
-                        List<NintendoDailyGameRecord> recent;
-                        string nick;
-                        NintendoSwitchClient.FetchStorePlayHistory(sessionToken, out allTime, out recent, out nick);
-                        _settings.NintendoStoreSessionToken = sessionToken;
-                        if (!string.IsNullOrEmpty(nick)) _settings.NintendoAccountNickname = nick;
-                        DataStore.SaveSettings(_settings);
-
-                        BeginInvoke(new Action(() =>
-                        {
-                            _btnNintendoConnect.Enabled = true;
-                            _btnNintendoConnect.Text = "2. Connect Nintendo Account";
-                            _txtNintendoAuthUrl.Text = "";
-                            _lblNintendoStatus.Text = string.Format("✓ Nintendo Store All-Time History connected ({0})! Found {1} all-time games across all years. Syncing now...",
-                                _settings.NintendoAccountNickname ?? "Connected", allTime.Count);
-                            _lblNintendoStatus.ForeColor = SuccessGreen;
-                            RunNintendoSwitchSync(true);
-                        }));
-                    }
-                    else
-                    {
-                        string idToken, accessToken, nickname, accountId;
-                        NintendoSwitchClient.RefreshTokensAndProfile(sessionToken, out idToken, out accessToken, out nickname, out accountId);
-                        var devices = NintendoSwitchClient.FetchOwnedDevices(idToken);
-
-                        _settings.NintendoSessionToken = sessionToken;
-                        _settings.NintendoAccountNickname = nickname ?? "Connected";
-                        _settings.NintendoAccountId = accountId ?? "";
-                        DataStore.SaveSettings(_settings);
-
-                        BeginInvoke(new Action(() =>
-                        {
-                            _btnNintendoConnect.Enabled = true;
-                            _btnNintendoConnect.Text = "2. Connect Nintendo Account";
-                            _txtNintendoAuthUrl.Text = "";
-                            _lblNintendoStatus.Text = string.Format("✓ Connected as {0}! Found {1} linked Switch console(s).",
-                                _settings.NintendoAccountNickname, devices.Count);
-                            _lblNintendoStatus.ForeColor = SuccessGreen;
-                        }));
-                    }
+                        _btnNintendoConnect.Enabled = true;
+                        _btnNintendoConnect.Text = "2. Connect Nintendo Account";
+                        _txtNintendoAuthUrl.Text = "";
+                        _lblNintendoStatus.Text = string.Format("✓ Connected ({0})! Found {1} games in history. Syncing day-by-day playtime now...",
+                            _settings.NintendoAccountNickname ?? "Connected", allTime.Count);
+                        _lblNintendoStatus.ForeColor = SuccessGreen;
+                        RunNintendoSwitchSync(false);
+                    }));
                 }
                 catch (Exception ex)
                 {
@@ -864,37 +780,9 @@ namespace BackloggdAutoSync
             RunNintendoSwitchSync(false);
         }
 
-        private void BtnNintendoSyncAllHistory_Click(object sender, EventArgs e)
-        {
-            if (string.IsNullOrWhiteSpace(_settings.NintendoStoreSessionToken))
-            {
-                var dr = MessageBox.Show(
-                    "Your Parental Controls connection only has history from when Parental Controls was linked (June 2025).\r\n\r\n" +
-                    "To fetch all your Switch 1 games across all years (2017–present) from the Nintendo Store app:\r\n" +
-                    "1. Click 'Yes' below to open the Nintendo Store Login (1b) in your browser.\r\n" +
-                    "2. Right-click 'Select this person' -> 'Copy link address'.\r\n" +
-                    "3. Paste it into Step 2 and click '2. Connect Nintendo Account', then click this button again!\r\n\r\n" +
-                    "Open the Nintendo Store Login (1b) in your browser now?",
-                    "Connect Nintendo Store (1b) for Switch 1 All-Time History",
-                    MessageBoxButtons.YesNoCancel,
-                    MessageBoxIcon.Information);
-
-                if (dr == DialogResult.Yes)
-                {
-                    BtnNintendoOpenStoreLogin_Click(sender, e);
-                    return;
-                }
-                if (dr == DialogResult.Cancel)
-                {
-                    return;
-                }
-            }
-            RunNintendoSwitchSync(true);
-        }
-
         private void RunNintendoSwitchSync(bool fetchEntireHistory)
         {
-            if (string.IsNullOrWhiteSpace(_settings.NintendoSessionToken) && string.IsNullOrWhiteSpace(_settings.NintendoStoreSessionToken))
+            if (string.IsNullOrWhiteSpace(_settings.NintendoStoreSessionToken))
             {
                 MessageBox.Show("Please connect your Nintendo Account in Steps 1 & 2 above first.",
                     "Nintendo Account Not Connected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -902,17 +790,8 @@ namespace BackloggdAutoSync
             }
 
             _btnNintendoSyncNow.Enabled = false;
-            _btnNintendoSyncAllHistory.Enabled = false;
-            if (fetchEntireHistory)
-            {
-                _btnNintendoSyncAllHistory.Text = "Fetching All Archives & Store History...";
-                _lblNintendoStatus.Text = "Fetching all archived monthly summaries + Nintendo Store all-time game history...";
-            }
-            else
-            {
-                _btnNintendoSyncNow.Text = "Fetching Switch Summaries...";
-                _lblNintendoStatus.Text = "Contacting Nintendo Switch Summary service...";
-            }
+            _btnNintendoSyncNow.Text = "Syncing Switch Playtime...";
+            _lblNintendoStatus.Text = "Fetching Nintendo Switch game history & syncing day-by-day playtime to Backloggd...";
             _lblNintendoStatus.ForeColor = TextMuted;
 
             ThreadPool.QueueUserWorkItem(_ =>
@@ -922,12 +801,12 @@ namespace BackloggdAutoSync
                     int count;
                     string msg = _tracker.FetchAndSyncNintendoSwitchSummaries(true, out count, fetchEntireHistory);
                     _lastNintendoAutoSyncTime = DateTime.Now;
+                    _settings.LastNintendoAutoSyncDate = DateTime.Now.ToString("yyyy-MM-dd");
+                    DataStore.SaveSettings(_settings);
                     BeginInvoke(new Action(() =>
                     {
                         _btnNintendoSyncNow.Enabled = true;
-                        _btnNintendoSyncNow.Text = "🔄 Fetch & Sync Recent Playtime";
-                        _btnNintendoSyncAllHistory.Enabled = true;
-                        _btnNintendoSyncAllHistory.Text = "📚 Sync Entire Available History (All Months/Years)";
+                        _btnNintendoSyncNow.Text = "🔄 Sync Nintendo Switch Playtime Now";
                         _lblNintendoStatus.Text = "✓ " + msg;
                         _lblNintendoStatus.ForeColor = SuccessGreen;
                         RefreshSessionsList();
@@ -939,9 +818,7 @@ namespace BackloggdAutoSync
                     BeginInvoke(new Action(() =>
                     {
                         _btnNintendoSyncNow.Enabled = true;
-                        _btnNintendoSyncNow.Text = "🔄 Fetch & Sync Recent Playtime";
-                        _btnNintendoSyncAllHistory.Enabled = true;
-                        _btnNintendoSyncAllHistory.Text = "📚 Sync Entire Available History (All Months/Years)";
+                        _btnNintendoSyncNow.Text = "🔄 Sync Nintendo Switch Playtime Now";
                         _lblNintendoStatus.Text = "✗ Switch sync error: " + ex.Message;
                         _lblNintendoStatus.ForeColor = Color.FromArgb(231, 76, 60);
                     }));
@@ -1345,12 +1222,16 @@ namespace BackloggdAutoSync
             _tracker.Poll(_settings);
             UpdateLiveStatusUi();
 
-            // Check Nintendo Switch daily summaries every 30 minutes in background if enabled
+            // Check Nintendo Switch daily history once a day in background if enabled
+            string todayStr = DateTime.Now.ToString("yyyy-MM-dd");
             if (_settings.NintendoAutoSync &&
-                !string.IsNullOrWhiteSpace(_settings.NintendoSessionToken) &&
-                (DateTime.Now - _lastNintendoAutoSyncTime).TotalMinutes >= 30)
+                !string.IsNullOrWhiteSpace(_settings.NintendoStoreSessionToken) &&
+                _settings.LastNintendoAutoSyncDate != todayStr &&
+                (DateTime.Now - _lastNintendoAutoSyncTime).TotalMinutes >= 60)
             {
                 _lastNintendoAutoSyncTime = DateTime.Now;
+                _settings.LastNintendoAutoSyncDate = todayStr;
+                DataStore.SaveSettings(_settings);
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
                     try

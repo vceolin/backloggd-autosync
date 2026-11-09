@@ -23,6 +23,7 @@ namespace BackloggdAutoSync
         public string NintendoAccountId { get; set; }
         public bool NintendoAutoSync { get; set; }
         public int NintendoSyncDaysBack { get; set; }
+        public string LastNintendoAutoSyncDate { get; set; }
 
         public AppSettings()
         {
@@ -41,6 +42,7 @@ namespace BackloggdAutoSync
             NintendoAccountId = "";
             NintendoAutoSync = true;
             NintendoSyncDaysBack = 14;
+            LastNintendoAutoSyncDate = "";
             IgnoredAppIds = new List<int>
             {
                 228980,  // Steamworks Common Redistributables

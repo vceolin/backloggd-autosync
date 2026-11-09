@@ -84,7 +84,7 @@ namespace BackloggdAutoSync
             }
         }
 
-        public static NintendoLoginChallenge CreateLoginChallenge(bool useNintendoStoreClient = false)
+        public static NintendoLoginChallenge CreateLoginChallenge(bool useNintendoStoreClient = true)
         {
             string verifier = GenerateRandomAlphaString(50);
             string state = GenerateRandomAlphaString(50);
