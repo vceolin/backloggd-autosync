@@ -10,48 +10,6 @@ using System.Web.Script.Serialization;
 
 namespace BackloggdAutoSync
 {
-    public class NintendoLoginChallenge
-    {
-        public string ClientId { get; set; }
-        public string LoginUrl { get; set; }
-        public string CodeVerifier { get; set; }
-        public string State { get; set; }
-    }
-
-    public class NintendoDeviceInfo
-    {
-        public string DeviceId { get; set; }
-        public string Label { get; set; }
-        public string SerialNumber { get; set; }
-
-        public override string ToString()
-        {
-            return string.Format("{0} (ID: {1})", string.IsNullOrEmpty(Label) ? "Nintendo Switch" : Label, DeviceId);
-        }
-    }
-
-    public class NintendoDailyGameRecord
-    {
-        public string DeviceId { get; set; }
-        public string DeviceLabel { get; set; }
-        public string DateStr { get; set; } // YYYY-MM-DD
-        public string PlayerNickname { get; set; }
-        public string ApplicationId { get; set; } // 16-char hex title ID e.g. 0100152000022000
-        public string Title { get; set; }
-        public int PlayingTimeMinutes { get; set; }
-    }
-
-    public class NintendoAllTimeGameRecord
-    {
-        public string TitleId { get; set; }
-        public string TitleName { get; set; }
-        public string Platform { get; set; }
-        public string FirstPlayedDate { get; set; } // YYYY-MM-DD
-        public string LastPlayedDate { get; set; }  // YYYY-MM-DD
-        public int TotalPlayedDays { get; set; }
-        public int TotalPlayedMinutes { get; set; }
-    }
-
     public static class NintendoSwitchClient
     {
         public const string ParentalClientId = "54789befb391a838";
@@ -704,6 +662,36 @@ namespace BackloggdAutoSync
             }
         }
 
+        public static bool IsNonGameSwitchApp(string switchApplicationId, string title)
+        {
+            if (!string.IsNullOrEmpty(switchApplicationId))
+            {
+                string id = switchApplicationId.Trim().ToLowerInvariant();
+                // Media apps (YouTube, Hulu, Crunchyroll, Twitch) and Nintendo Classics emulator hubs
+                if (id == "01003a400c3da000" || id == "0100a66003384000" || id == "0100e46012954000" || id == "0100f90015014000" ||
+                    id == "01008d300c50c000" || id == "040029a01d3e0000" || id == "0100e0601c632000" ||
+                    id == "010012f017576000" || id == "0100c62011050000" || id == "0100c9a00ece6000" || id == "0100d870045b6000")
+                {
+                    return true;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(title))
+            {
+                string t = title.Trim();
+                if (string.Equals(t, "YouTube", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(t, "Hulu", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(t, "Crunchyroll", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(t, "Twitch", StringComparison.OrdinalIgnoreCase) ||
+                    t.IndexOf("Nintendo Classics", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public static int GetStableSwitchAppId(string switchApplicationId, string title)
         {
             // Generate a deterministic negative integer AppId for Switch titles so they never collide with positive Steam AppIDs
@@ -724,9 +712,21 @@ namespace BackloggdAutoSync
             out List<NintendoDailyGameRecord> recentDailyGames,
             out string nickname)
         {
+            string unusedToken;
+            FetchStorePlayHistory(storeSessionToken, out allTimeGames, out recentDailyGames, out nickname, out unusedToken);
+        }
+
+        public static void FetchStorePlayHistory(
+            string storeSessionToken,
+            out List<NintendoAllTimeGameRecord> allTimeGames,
+            out List<NintendoDailyGameRecord> recentDailyGames,
+            out string nickname,
+            out string storeAccessToken)
+        {
             allTimeGames = new List<NintendoAllTimeGameRecord>();
             recentDailyGames = new List<NintendoDailyGameRecord>();
             nickname = null;
+            storeAccessToken = null;
 
             if (string.IsNullOrWhiteSpace(storeSessionToken))
             {
@@ -763,6 +763,7 @@ namespace BackloggdAutoSync
             }
 
             string accessToken = Convert.ToString(tokenDict["access_token"]);
+            storeAccessToken = accessToken;
 
             try
             {
@@ -812,6 +813,7 @@ namespace BackloggdAutoSync
                     int totalMins = g.ContainsKey("totalPlayedMinutes") && g["totalPlayedMinutes"] != null ? Convert.ToInt32(g["totalPlayedMinutes"]) : 0;
 
                     if (string.IsNullOrEmpty(titleName) || totalMins <= 0) continue;
+                    if (IsNonGameSwitchApp(titleId, titleName)) continue;
 
                     string firstDate = firstPlayedRaw.Length >= 10 ? firstPlayedRaw.Substring(0, 10) : DateTime.Today.ToString("yyyy-MM-dd");
                     string lastDate = lastPlayedRaw.Length >= 10 ? lastPlayedRaw.Substring(0, 10) : firstDate;
@@ -853,6 +855,7 @@ namespace BackloggdAutoSync
                         string titleName = dItem.ContainsKey("titleName") && dItem["titleName"] != null ? Convert.ToString(dItem["titleName"]).Trim() : "Switch Game";
                         int mins = dItem.ContainsKey("totalPlayedMinutes") && dItem["totalPlayedMinutes"] != null ? Convert.ToInt32(dItem["totalPlayedMinutes"]) : 0;
                         if (mins <= 0) continue;
+                        if (IsNonGameSwitchApp(titleId, titleName)) continue;
 
                         recentDailyGames.Add(new NintendoDailyGameRecord
                         {
@@ -866,6 +869,70 @@ namespace BackloggdAutoSync
                     }
                 }
             }
+        }
+
+        public static List<NintendoDailyGameRecord> FetchStoreGameDailyHistory(string accessToken, string titleId, string titleName)
+        {
+            var records = new List<NintendoDailyGameRecord>();
+            if (string.IsNullOrWhiteSpace(accessToken) || string.IsNullOrWhiteSpace(titleId))
+            {
+                return records;
+            }
+
+            var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            int offset = 0;
+            int totalFetched = 0;
+
+            while (true)
+            {
+                string url = string.Format("{0}/game_titles/{1}?limit=200&offset={2}", StoreHistoryUrl, Uri.EscapeDataString(titleId.Trim()), offset);
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.Method = "GET";
+                req.Accept = "application/json";
+                req.UserAgent = StoreUserAgent;
+                req.Headers["Authorization"] = "Bearer " + accessToken;
+                req.Headers["gentry-locale"] = "en-US";
+                req.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+
+                string json = ReadResponseText(req);
+                var dict = serializer.Deserialize<Dictionary<string, object>>(json);
+                if (dict == null) break;
+
+                int totalDays = dict.ContainsKey("totalPlayedDays") && dict["totalPlayedDays"] != null
+                    ? Convert.ToInt32(dict["totalPlayedDays"])
+                    : 0;
+                ArrayList playedDays = dict.ContainsKey("playedDays") ? dict["playedDays"] as ArrayList : null;
+                if (playedDays == null || playedDays.Count == 0) break;
+
+                foreach (object dObj in playedDays)
+                {
+                    Dictionary<string, object> d = dObj as Dictionary<string, object>;
+                    if (d == null) continue;
+
+                    string playedDate = d.ContainsKey("playedDate") && d["playedDate"] != null ? Convert.ToString(d["playedDate"]) : "";
+                    if (playedDate.Length >= 10) playedDate = playedDate.Substring(0, 10);
+                    if (string.IsNullOrEmpty(playedDate)) continue;
+
+                    int mins = d.ContainsKey("minutesPlayed") && d["minutesPlayed"] != null ? Convert.ToInt32(d["minutesPlayed"]) : 0;
+                    if (mins <= 0) continue;
+
+                    records.Add(new NintendoDailyGameRecord
+                    {
+                        DeviceId = "NintendoStore",
+                        DeviceLabel = "Nintendo Store Activity",
+                        DateStr = playedDate,
+                        ApplicationId = titleId.Trim(),
+                        Title = titleName,
+                        PlayingTimeMinutes = mins
+                    });
+                }
+
+                totalFetched += playedDays.Count;
+                offset += playedDays.Count;
+                if (totalDays > 0 && totalFetched >= totalDays) break;
+            }
+
+            return records;
         }
 
         private static string ReadResponseText(HttpWebRequest req)

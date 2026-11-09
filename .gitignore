@@ -5,3 +5,4 @@ data/
 # Build artifacts / temporary files
 *.pdb
 *.user
+tests/bin/

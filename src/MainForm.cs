@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -14,12 +15,22 @@ namespace BackloggdAutoSync
         private const string StartupRegistryKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string StartupValueName = "BackloggdAutoSync";
 
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern uint RegisterWindowMessage(string lpString);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        private static readonly uint WmTaskbarCreated = RegisterWindowMessage("TaskbarCreated");
+        private static readonly uint WmShowApp = RegisterWindowMessage(Program.AppShowMessageName);
+
         private AppSettings _settings;
         private readonly SteamTracker _tracker;
         private readonly System.Windows.Forms.Timer _pollTimer;
         private readonly System.Windows.Forms.Timer _mappingDebounceTimer;
         private NotifyIcon _trayIcon;
         private ContextMenuStrip _trayMenu;
+        private ToolStripMenuItem _trayStatusItem;
         private bool _allowClose = false;
         private bool _suppressSearchTextChanged = false;
         private int _searchRequestSeq = 0;
@@ -125,13 +136,78 @@ namespace BackloggdAutoSync
             }
         }
 
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == (int)WmTaskbarCreated)
+            {
+                // When Windows Explorer restarts, re-register tray icon
+                if (_trayIcon != null)
+                {
+                    _trayIcon.Visible = false;
+                    _trayIcon.Visible = true;
+                }
+            }
+            else if (m.Msg == (int)WmShowApp)
+            {
+                // Signal from another instance or shortcut to bring app to front
+                ShowMainWindow();
+            }
+            base.WndProc(ref m);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (WindowState == FormWindowState.Minimized)
+            {
+                Hide();
+                ShowInTaskbar = false;
+                if (_settings != null && _settings.ShowNotifications && _trayIcon != null)
+                {
+                    _trayIcon.ShowBalloonTip(1500, "Backloggd AutoSync",
+                        "Running in background. Click the tray icon anytime to open.", ToolTipIcon.Info);
+                }
+            }
+        }
+
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
             if (WindowState == FormWindowState.Minimized)
             {
                 Hide();
+                ShowInTaskbar = false;
+                if (_settings != null && _settings.ShowNotifications && _trayIcon != null)
+                {
+                    _trayIcon.ShowBalloonTip(2000, "Backloggd AutoSync Started",
+                        "Running in system tray. Tracking Steam in background.", ToolTipIcon.Info);
+                }
             }
+        }
+
+        private Icon LoadOrGenerateIcon()
+        {
+            try
+            {
+                Icon exeIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                if (exeIcon != null)
+                {
+                    return exeIcon;
+                }
+            }
+            catch { }
+
+            try
+            {
+                string iconFile = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
+                if (System.IO.File.Exists(iconFile))
+                {
+                    return new Icon(iconFile);
+                }
+            }
+            catch { }
+
+            return CreateAppIcon();
         }
 
         private Icon CreateAppIcon()
@@ -140,9 +216,17 @@ namespace BackloggdAutoSync
             using (Graphics g = Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
                 using (SolidBrush bg = new SolidBrush(AccentPink))
                 {
                     g.FillEllipse(bg, 1, 1, 30, 30);
+                }
+                using (Pen pen = new Pen(Color.White, 1.5f))
+                {
+                    g.DrawEllipse(pen, 2, 2, 28, 28);
                 }
                 using (Font f = new Font("Segoe UI", 15, FontStyle.Bold, GraphicsUnit.Pixel))
                 using (SolidBrush fg = new SolidBrush(Color.White))
@@ -157,38 +241,71 @@ namespace BackloggdAutoSync
         private void SetupTrayIcon()
         {
             _trayMenu = new ContextMenuStrip();
-            _trayMenu.Items.Add("Open Backloggd AutoSync", null, (s, e) => ShowMainWindow());
+            var mnuOpen = new ToolStripMenuItem("Open Backloggd AutoSync", null, (s, e) => ShowMainWindow())
+            {
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold)
+            };
+            _trayMenu.Items.Add(mnuOpen);
+
+            _trayStatusItem = new ToolStripMenuItem("Status: Idle") { Enabled = false };
+            _trayMenu.Items.Add(_trayStatusItem);
+
+            _trayMenu.Items.Add(new ToolStripSeparator());
             _trayMenu.Items.Add("Sync Pending Sessions Now", null, (s, e) => SyncAllPendingSessions());
             _trayMenu.Items.Add(new ToolStripSeparator());
             _trayMenu.Items.Add("Exit Completely", null, (s, e) =>
             {
                 _allowClose = true;
-                _trayIcon.Visible = false;
+                if (_trayIcon != null)
+                {
+                    _trayIcon.Visible = false;
+                    _trayIcon.Dispose();
+                }
                 Application.Exit();
             });
 
             _trayIcon = new NotifyIcon
             {
                 Icon = this.Icon,
-                Text = "Backloggd AutoSync — Idle",
+                Text = "Backloggd AutoSync - Idle",
                 ContextMenuStrip = _trayMenu,
                 Visible = true
+            };
+
+            // Left-click restores or brings window to front immediately
+            _trayIcon.MouseClick += (s, e) =>
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    ShowMainWindow();
+                }
             };
             _trayIcon.DoubleClick += (s, e) => ShowMainWindow();
         }
 
-        private void ShowMainWindow()
+        public void ShowMainWindow()
         {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(ShowMainWindow));
+                return;
+            }
+
             Show();
-            WindowState = FormWindowState.Normal;
+            if (WindowState == FormWindowState.Minimized)
+            {
+                WindowState = FormWindowState.Normal;
+            }
             ShowInTaskbar = true;
             UpdateLiveStatusUi();
             Activate();
+            BringToFront();
+            try { SetForegroundWindow(this.Handle); } catch { }
         }
 
         private void InitializeComponent()
         {
-            this.Icon = CreateAppIcon();
+            this.Icon = LoadOrGenerateIcon();
             this.Text = "Backloggd AutoSync — Steam Daily Playtime Tracker";
             this.Size = new Size(960, 680);
             this.MinimumSize = new Size(860, 580);
@@ -1208,208 +1325,19 @@ namespace BackloggdAutoSync
         private void ShowAutoSuggestModalForSession(SessionEntry entry, string rawTitle, List<GameSearchResult> preloadedResults)
         {
             ShowMainWindow();
-
-            using (Form dlg = new Form())
-            {
-                dlg.Text = "Pick Backloggd Game — Auto-Suggest";
-                dlg.Size = new Size(560, 400);
-                dlg.StartPosition = FormStartPosition.CenterParent;
-                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
-                dlg.MaximizeBox = false;
-                dlg.MinimizeBox = false;
-                dlg.BackColor = BgCard;
-                dlg.ForeColor = TextLight;
-                dlg.Font = this.Font;
-
-                var lblHeader = new Label
+            UnmappedGameDialog.Show(
+                this,
+                this.Font,
+                _settings,
+                entry,
+                rawTitle,
+                preloadedResults,
+                idsToBatchSync => ThreadPool.QueueUserWorkItem(_ => _tracker.BatchSyncSessionsByGame(idsToBatchSync, false)),
+                () =>
                 {
-                    Text = string.Format("Select Backloggd match for: {0} {1}",
-                        rawTitle, entry.AppId > 0 ? ("(AppID " + entry.AppId + ")") : ""),
-                    Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
-                    ForeColor = TextLight,
-                    AutoSize = true,
-                    Location = new Point(18, 16)
-                };
-
-                var lblSearch = new Label
-                {
-                    Text = "Search Backloggd (auto-suggests as you type):",
-                    ForeColor = TextMuted,
-                    AutoSize = true,
-                    Location = new Point(18, 48)
-                };
-
-                var txtQuery = new TextBox
-                {
-                    Location = new Point(18, 72),
-                    Width = 505,
-                    Text = BackloggdClient.CleanGameTitle(rawTitle),
-                    BackColor = BgInput,
-                    ForeColor = TextLight,
-                    BorderStyle = BorderStyle.FixedSingle
-                };
-
-                var lblStatus = new Label
-                {
-                    Text = "Loading suggestions...",
-                    ForeColor = TextMuted,
-                    AutoSize = true,
-                    Location = new Point(18, 102)
-                };
-
-                var lstResults = new ListBox
-                {
-                    Location = new Point(18, 126),
-                    Size = new Size(505, 165),
-                    BackColor = BgInput,
-                    ForeColor = TextLight,
-                    BorderStyle = BorderStyle.FixedSingle
-                };
-
-                var btnConfirm = CreateStyledButton("✓ Confirm Match & Sync Session", AccentPink, 250, 38);
-                btnConfirm.Location = new Point(18, 304);
-
-                var btnCancel = CreateStyledButton("Later", BgInput, 100, 38);
-                btnCancel.Location = new Point(423, 304);
-                btnCancel.Click += (s, e) => dlg.Close();
-
-                var debounce = new System.Windows.Forms.Timer { Interval = 350 };
-                int modalReqSeq = 0;
-
-                Action runSearch = () =>
-                {
-                    string q = txtQuery.Text.Trim();
-                    if (q.Length < 2) return;
-                    int mySeq = Interlocked.Increment(ref modalReqSeq);
-                    lblStatus.Text = "Searching Backloggd for '" + q + "'...";
-                    lblStatus.ForeColor = TextMuted;
-
-                    ThreadPool.QueueUserWorkItem(_ =>
-                    {
-                        try
-                        {
-                            var res = BackloggdClient.SearchGame(q, _settings);
-                            if (dlg.IsDisposed || !dlg.IsHandleCreated) return;
-                            dlg.BeginInvoke(new Action(() =>
-                            {
-                                if (mySeq != modalReqSeq || dlg.IsDisposed) return;
-                                lstResults.Items.Clear();
-                                foreach (var r in res) lstResults.Items.Add(r);
-                                if (lstResults.Items.Count > 0)
-                                {
-                                    var best = BackloggdClient.SelectBestMatch(q, res);
-                                    lstResults.SelectedItem = (best != null && lstResults.Items.Contains(best)) ? best : lstResults.Items[0];
-                                    lblStatus.Text = string.Format("Found {0} match(es) — double-click or click Confirm below:", res.Count);
-                                    lblStatus.ForeColor = SuccessGreen;
-                                }
-                                else
-                                {
-                                    lblStatus.Text = "No matches found. Try editing the game title above.";
-                                    lblStatus.ForeColor = WarnOrange;
-                                }
-                            }));
-                        }
-                        catch (Exception ex)
-                        {
-                            if (dlg.IsDisposed || !dlg.IsHandleCreated) return;
-                            dlg.BeginInvoke(new Action(() =>
-                            {
-                                if (dlg.IsDisposed) return;
-                                lblStatus.Text = "Search error: " + ex.Message;
-                                lblStatus.ForeColor = WarnOrange;
-                            }));
-                        }
-                    });
-                };
-
-                debounce.Tick += (s, e) =>
-                {
-                    debounce.Stop();
-                    runSearch();
-                };
-
-                txtQuery.TextChanged += (s, e) =>
-                {
-                    debounce.Stop();
-                    debounce.Start();
-                };
-
-                EventHandler confirmAction = (s, e) =>
-                {
-                    var picked = lstResults.SelectedItem as GameSearchResult;
-                    if (picked == null)
-                    {
-                        MessageBox.Show("Please select a game from the suggestions list.", "Select Game",
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-
-                    if (entry.AppId != 0)
-                    {
-                        var mappings = DataStore.LoadMappings();
-                        mappings.RemoveAll(m => m.AppId == entry.AppId);
-                        mappings.Add(new GameMapping
-                        {
-                            AppId = entry.AppId,
-                            BackloggdGameId = picked.GameId,
-                            SteamTitle = rawTitle,
-                            BackloggdTitle = picked.Title,
-                            ReleaseYear = picked.ReleaseYear,
-                            ManualOverride = true,
-                            LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                        });
-                        DataStore.SaveMappings(mappings);
-                    }
-
-                    var sessions = DataStore.LoadSessions();
-                    var idsToBatchSync = new List<string>();
-                    foreach (var x in sessions)
-                    {
-                        if (x.Id == entry.Id || (entry.AppId != 0 && x.AppId == entry.AppId && !x.Synced))
-                        {
-                            x.BackloggdGameId = picked.GameId;
-                            x.GameTitle = picked.Title;
-                            x.Synced = false;
-                            x.SyncError = "Syncing...";
-                            idsToBatchSync.Add(x.Id);
-                        }
-                    }
-                    DataStore.SaveSessions(sessions);
-
                     RefreshMappingsList();
                     RefreshSessionsList();
-
-                    ThreadPool.QueueUserWorkItem(_ => _tracker.BatchSyncSessionsByGame(idsToBatchSync, false));
-                    dlg.DialogResult = DialogResult.OK;
-                    dlg.Close();
-                };
-
-                btnConfirm.Click += confirmAction;
-                lstResults.DoubleClick += confirmAction;
-
-                dlg.Controls.AddRange(new Control[]
-                {
-                    lblHeader, lblSearch, txtQuery, lblStatus, lstResults, btnConfirm, btnCancel
                 });
-
-                dlg.Shown += (s, e) =>
-                {
-                    if (preloadedResults != null && preloadedResults.Count > 0)
-                    {
-                        foreach (var r in preloadedResults) lstResults.Items.Add(r);
-                        lstResults.SelectedIndex = 0;
-                        lblStatus.Text = string.Format("Found {0} suggestion(s) — pick the matching Backloggd entry:", preloadedResults.Count);
-                        lblStatus.ForeColor = SuccessGreen;
-                    }
-                    else
-                    {
-                        runSearch();
-                    }
-                };
-
-                dlg.FormClosed += (s, e) => debounce.Dispose();
-                dlg.ShowDialog(this);
-            }
         }
 
         private void PollTimer_Tick(object sender, EventArgs e)
@@ -1449,7 +1377,16 @@ namespace BackloggdAutoSync
             {
                 string dur = FormatDuration(_tracker.CurrentElapsedSeconds);
                 string trayText = string.Format("Playing: {0} ({1})", _tracker.CurrentTitle, dur);
-                _trayIcon.Text = trayText.Length > 63 ? trayText.Substring(0, 63) : trayText;
+                if (trayText.Length > 63) trayText = trayText.Substring(0, 63);
+
+                if (_trayIcon != null)
+                {
+                    _trayIcon.Text = trayText;
+                }
+                if (_trayStatusItem != null)
+                {
+                    _trayStatusItem.Text = string.Format("Playing: {0} ({1})", _tracker.CurrentTitle, dur);
+                }
 
                 if (this.Visible && this.WindowState != FormWindowState.Minimized)
                 {
@@ -1461,12 +1398,20 @@ namespace BackloggdAutoSync
             }
             else
             {
-                _trayIcon.Text = "Backloggd AutoSync — Idle";
+                if (_trayIcon != null)
+                {
+                    _trayIcon.Text = "Backloggd AutoSync - Idle";
+                }
+                if (_trayStatusItem != null)
+                {
+                    _trayStatusItem.Text = "Status: Idle";
+                }
+
                 if (this.Visible && this.WindowState != FormWindowState.Minimized)
                 {
                     _lblLiveStatus.Text = "Idle — Waiting for a Steam game to launch...";
                     _lblLiveStatus.ForeColor = TextLight;
-                    _lblLiveTimer.Text = "Lightweight mode: checks Steam once per minute (close window to minimize to tray)";
+                    _lblLiveTimer.Text = "Lightweight mode: checks Steam once per minute (minimize or close window to send to tray)";
                 }
             }
         }
@@ -1647,129 +1592,12 @@ namespace BackloggdAutoSync
 
         private void BtnManualLog_Click(object sender, EventArgs e)
         {
-            using (Form dlg = new Form())
-            {
-                dlg.Text = "Log Session Manually — With Live Auto-Suggest";
-                dlg.Size = new Size(520, 420);
-                dlg.StartPosition = FormStartPosition.CenterParent;
-                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
-                dlg.MaximizeBox = false;
-                dlg.MinimizeBox = false;
-                dlg.BackColor = BgCard;
-                dlg.ForeColor = TextLight;
-                dlg.Font = this.Font;
-
-                var l1 = new Label { Text = "Search Game on Backloggd (auto-suggests as you type):", Location = new Point(20, 18), AutoSize = true };
-                var txtTitle = new TextBox { Location = new Point(20, 42), Width = 460, BackColor = BgInput, ForeColor = TextLight, BorderStyle = BorderStyle.FixedSingle };
-
-                var lblSuggest = new Label { Text = "Start typing a game name above...", Location = new Point(20, 70), AutoSize = true, ForeColor = TextMuted };
-                var lstMatches = new ListBox { Location = new Point(20, 94), Size = new Size(460, 130), BackColor = BgInput, ForeColor = TextLight, BorderStyle = BorderStyle.FixedSingle };
-
-                var l3 = new Label { Text = "Date (YYYY-MM-DD):", Location = new Point(20, 240), AutoSize = true };
-                var txtDate = new TextBox { Location = new Point(175, 237), Width = 110, Text = DateTime.Now.ToString("yyyy-MM-dd"), BackColor = BgInput, ForeColor = TextLight };
-
-                var l4 = new Label { Text = "Minutes Played:", Location = new Point(20, 278), AutoSize = true };
-                var numMins = new NumericUpDown { Location = new Point(175, 275), Width = 110, Minimum = 1, Maximum = 1440, Value = 60, BackColor = BgInput, ForeColor = TextLight };
-
-                var btnAdd = CreateStyledButton("✓ Log & Sync to Backloggd", AccentPink, 230, 38);
-                btnAdd.Location = new Point(140, 325);
-
-                var debounce = new System.Windows.Forms.Timer { Interval = 350 };
-                int reqSeq = 0;
-
-                debounce.Tick += (s2, e2) =>
-                {
-                    debounce.Stop();
-                    string q = txtTitle.Text.Trim();
-                    if (q.Length < 2) return;
-                    int mySeq = Interlocked.Increment(ref reqSeq);
-                    lblSuggest.Text = "Searching Backloggd for '" + q + "'...";
-                    lblSuggest.ForeColor = TextMuted;
-
-                    ThreadPool.QueueUserWorkItem(_ =>
-                    {
-                        try
-                        {
-                            var res = BackloggdClient.SearchGame(q, _settings);
-                            if (dlg.IsDisposed || !dlg.IsHandleCreated) return;
-                            dlg.BeginInvoke(new Action(() =>
-                            {
-                                if (mySeq != reqSeq || dlg.IsDisposed) return;
-                                lstMatches.Items.Clear();
-                                foreach (var r in res) lstMatches.Items.Add(r);
-                                if (lstMatches.Items.Count > 0)
-                                {
-                                    var best = BackloggdClient.SelectBestMatch(q, res);
-                                    lstMatches.SelectedItem = (best != null && lstMatches.Items.Contains(best)) ? best : lstMatches.Items[0];
-                                    lblSuggest.Text = string.Format("Found {0} game(s) — select one below:", res.Count);
-                                    lblSuggest.ForeColor = SuccessGreen;
-                                }
-                                else
-                                {
-                                    lblSuggest.Text = "No Backloggd matches found.";
-                                    lblSuggest.ForeColor = WarnOrange;
-                                }
-                            }));
-                        }
-                        catch (Exception ex)
-                        {
-                            if (dlg.IsDisposed || !dlg.IsHandleCreated) return;
-                            dlg.BeginInvoke(new Action(() =>
-                            {
-                                if (dlg.IsDisposed) return;
-                                lblSuggest.Text = "Search error: " + ex.Message;
-                                lblSuggest.ForeColor = WarnOrange;
-                            }));
-                        }
-                    });
-                };
-
-                txtTitle.TextChanged += (s2, e2) =>
-                {
-                    debounce.Stop();
-                    debounce.Start();
-                };
-
-                btnAdd.Click += (s2, e2) =>
-                {
-                    var picked = lstMatches.SelectedItem as GameSearchResult;
-                    string title = picked != null ? picked.Title : txtTitle.Text.Trim();
-                    if (string.IsNullOrWhiteSpace(title))
-                    {
-                        MessageBox.Show("Please type and select a game first.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-
-                    int mins = (int)numMins.Value;
-                    string dateStr = txtDate.Text.Trim();
-
-                    var entry = new SessionEntry
-                    {
-                        Id = string.Format("manual_{0}", DateTime.Now.Ticks),
-                        AppId = 0,
-                        GameTitle = title,
-                        BackloggdGameId = picked != null ? picked.GameId : null,
-                        DateStr = dateStr,
-                        StartTimeIso = DateTime.Now.AddMinutes(-mins).ToString("o"),
-                        EndTimeIso = DateTime.Now.ToString("o"),
-                        DurationSeconds = mins * 60,
-                        Synced = false
-                    };
-
-                    var sessions = DataStore.LoadSessions();
-                    sessions.Insert(0, entry);
-                    DataStore.SaveSessions(sessions);
-                    RefreshSessionsList();
-
-                    ThreadPool.QueueUserWorkItem(_ => _tracker.SyncSessionEntryAsync(entry.Id, true));
-                    dlg.DialogResult = DialogResult.OK;
-                    dlg.Close();
-                };
-
-                dlg.FormClosed += (s2, e2) => debounce.Dispose();
-                dlg.Controls.AddRange(new Control[] { l1, txtTitle, lblSuggest, lstMatches, l3, txtDate, l4, numMins, btnAdd });
-                dlg.ShowDialog(this);
-            }
+            ManualLogDialog.Show(
+                this,
+                this.Font,
+                _settings,
+                sessionId => ThreadPool.QueueUserWorkItem(_ => _tracker.SyncSessionEntryAsync(sessionId, true)),
+                () => RefreshSessionsList());
         }
 
         private void BtnDeleteSession_Click(object sender, EventArgs e)
@@ -1956,29 +1784,27 @@ namespace BackloggdAutoSync
             if (!_allowClose && e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
+                this.WindowState = FormWindowState.Minimized;
                 this.Hide();
                 this.ShowInTaskbar = false;
-                if (_settings.ShowNotifications)
+                if (_settings.ShowNotifications && _trayIcon != null)
                 {
                     _trayIcon.ShowBalloonTip(2000, "Backloggd AutoSync Still Running",
-                        "Minimized to system tray. Double-click the tray icon anytime to open.", ToolTipIcon.Info);
+                        "Minimized to system tray. Click the tray icon anytime to open.", ToolTipIcon.Info);
                 }
                 return;
             }
-            _trayIcon.Visible = false;
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+            }
             base.OnFormClosing(e);
         }
 
         public static string FormatDuration(int totalSeconds)
         {
-            int hours = totalSeconds / 3600;
-            int mins = (totalSeconds % 3600) / 60;
-            int secs = totalSeconds % 60;
-            if (hours > 0)
-                return string.Format("{0}h {1}m {2}s", hours, mins, secs);
-            if (mins > 0)
-                return string.Format("{0}m {1}s", mins, secs);
-            return string.Format("{0}s", secs);
+            return TimeUtils.FormatDuration(totalSeconds);
         }
     }
 }

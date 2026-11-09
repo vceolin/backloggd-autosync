@@ -1,25 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Net;
-using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.Win32;
 
 namespace BackloggdAutoSync
 {
-    public class InstalledSteamGame
-    {
-        public int AppId { get; set; }
-        public string Title { get; set; }
-
-        public override string ToString()
-        {
-            return string.Format("{0} (AppID: {1})", Title, AppId);
-        }
-    }
-
     public class SteamTracker
     {
         private int _currentAppId = 0;
@@ -27,8 +12,7 @@ namespace BackloggdAutoSync
         private DateTime _sessionStart;
         private string _sessionDateStr = "";
         private DateTime _lastCheckpointTime = DateTime.MinValue;
-        private readonly Dictionary<int, string> _titleCache = new Dictionary<int, string>();
-        private readonly object _syncLock = new object();
+        private readonly SyncService _syncService;
 
         public int CurrentAppId { get { return _currentAppId; } }
         public string CurrentTitle { get { return _currentTitle; } }
@@ -42,10 +26,25 @@ namespace BackloggdAutoSync
             }
         }
 
+        public SyncService SyncService { get { return _syncService; } }
+
         public event Action<int, string> OnGameStarted;
         public event Action<SessionEntry> OnSessionCompleted;
-        public event Action<SessionEntry> OnSessionSynced;
-        public event Action<SessionEntry, string, List<GameSearchResult>> OnUnmappedGamePromptRequested;
+        public event Action<SessionEntry> OnSessionSynced
+        {
+            add { _syncService.OnSessionSynced += value; }
+            remove { _syncService.OnSessionSynced -= value; }
+        }
+        public event Action<SessionEntry, string, List<GameSearchResult>> OnUnmappedGamePromptRequested
+        {
+            add { _syncService.OnUnmappedGamePromptRequested += value; }
+            remove { _syncService.OnUnmappedGamePromptRequested -= value; }
+        }
+
+        public SteamTracker(SyncService syncService = null)
+        {
+            _syncService = syncService ?? new SyncService();
+        }
 
         public void RecoverCrashCheckpoint(AppSettings settings)
         {
@@ -136,7 +135,7 @@ namespace BackloggdAutoSync
                 _currentAppId = runningAppId;
                 _sessionStart = now;
                 _sessionDateStr = todayStr;
-                _currentTitle = ResolveSteamGameTitle(runningAppId);
+                _currentTitle = SteamLibrary.ResolveSteamGameTitle(runningAppId);
                 _lastCheckpointTime = now;
                 SaveCurrentCheckpoint();
 
@@ -149,7 +148,7 @@ namespace BackloggdAutoSync
                 // Pre-resolve mapping in background when game starts so it's ready before game exits
                 int launchedAppId = _currentAppId;
                 string launchedTitle = _currentTitle;
-                ThreadPool.QueueUserWorkItem(_ => TryPreResolveMappingOnLaunch(launchedAppId, launchedTitle));
+                ThreadPool.QueueUserWorkItem(_ => _syncService.TryPreResolveMappingOnLaunch(launchedAppId, launchedTitle));
             }
 
             // Periodic checkpoint every 30 seconds while playing
@@ -157,54 +156,6 @@ namespace BackloggdAutoSync
             {
                 _lastCheckpointTime = now;
                 SaveCurrentCheckpoint();
-            }
-        }
-
-        private void TryPreResolveMappingOnLaunch(int appId, string rawTitle)
-        {
-            try
-            {
-                var mappings = DataStore.LoadMappings();
-                if (mappings.Exists(m => m.AppId == appId && !string.IsNullOrEmpty(m.BackloggdGameId)))
-                {
-                    return;
-                }
-
-                var settings = DataStore.LoadSettings();
-                if (string.IsNullOrWhiteSpace(settings.SessionCookie)) return;
-
-                string cleanTitle = BackloggdClient.CleanGameTitle(rawTitle);
-                var results = BackloggdClient.SearchGame(cleanTitle, settings);
-                if (results.Count == 0 && cleanTitle != rawTitle)
-                {
-                    results = BackloggdClient.SearchGame(rawTitle, settings);
-                }
-
-                var best = BackloggdClient.SelectBestMatch(cleanTitle, results);
-                if (best != null)
-                {
-                    mappings = DataStore.LoadMappings();
-                    if (!mappings.Exists(m => m.AppId == appId))
-                    {
-                        mappings.Add(new GameMapping
-                        {
-                            AppId = appId,
-                            BackloggdGameId = best.GameId,
-                            SteamTitle = rawTitle,
-                            BackloggdTitle = best.Title,
-                            ReleaseYear = best.ReleaseYear,
-                            ManualOverride = false,
-                            LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                        });
-                        DataStore.SaveMappings(mappings);
-                        DataStore.Log(string.Format("Pre-matched on launch: {0} (AppID {1}) -> {2} (ID {3})",
-                            rawTitle, appId, best.Title, best.GameId));
-                    }
-                }
-            }
-            catch
-            {
-                // Ignore background pre-resolve errors
             }
         }
 
@@ -256,490 +207,7 @@ namespace BackloggdAutoSync
 
             if (settings.AutoSyncOnExit)
             {
-                ThreadPool.QueueUserWorkItem(_ => SyncSessionEntryAsync(entry.Id, true));
-            }
-        }
-
-        public void SyncSessionEntryAsync(string sessionId, bool allowInteractivePrompt = false)
-        {
-            lock (_syncLock)
-            {
-                var settings = DataStore.LoadSettings();
-                var sessions = DataStore.LoadSessions();
-                var entry = sessions.Find(s => s.Id == sessionId);
-                if (entry == null || entry.Synced) return;
-
-                if (string.IsNullOrWhiteSpace(settings.SessionCookie))
-                {
-                    entry.SyncError = "No Backloggd session cookie configured in Settings.";
-                    DataStore.SaveSessions(sessions);
-                    if (OnSessionSynced != null) OnSessionSynced(entry);
-                    return;
-                }
-
-                try
-                {
-                    var mappings = DataStore.LoadMappings();
-                    var map = entry.AppId != 0 ? mappings.Find(m => m.AppId == entry.AppId) : null;
-
-                    if ((map == null || string.IsNullOrEmpty(map.BackloggdGameId)) && string.IsNullOrEmpty(entry.BackloggdGameId))
-                    {
-                        string rawTitle = entry.AppId > 0 ? ResolveSteamGameTitle(entry.AppId) : (entry.GameTitle ?? "");
-                        string cleanTitle = BackloggdClient.CleanGameTitle(rawTitle);
-
-                        var searchResults = BackloggdClient.SearchGame(cleanTitle, settings);
-                        if (searchResults.Count == 0 && cleanTitle != rawTitle)
-                        {
-                            searchResults = BackloggdClient.SearchGame(rawTitle, settings);
-                        }
-
-                        var best = BackloggdClient.SelectBestMatch(cleanTitle, searchResults);
-                        if (best == null)
-                        {
-                            // Prompt user interactively with auto-suggestions if available
-                            if (allowInteractivePrompt && OnUnmappedGamePromptRequested != null)
-                            {
-                                entry.SyncError = "Waiting for game selection...";
-                                DataStore.SaveSessions(sessions);
-                                OnUnmappedGamePromptRequested(entry, rawTitle, searchResults);
-                                return;
-                            }
-
-                            if (searchResults.Count == 0)
-                            {
-                                throw new Exception(string.Format("No match found for \"{0}\". Double-click this session to pick a Backloggd game.", rawTitle));
-                            }
-                            else
-                            {
-                                var topNames = new List<string>();
-                                for (int i = 0; i < Math.Min(3, searchResults.Count); i++)
-                                {
-                                    topNames.Add("\"" + searchResults[i].Title + "\"");
-                                }
-                                throw new Exception(string.Format("Multiple matches ({0}). Double-click this session to choose.", string.Join(", ", topNames.ToArray())));
-                            }
-                        }
-
-                        map = new GameMapping
-                        {
-                            AppId = entry.AppId,
-                            SwitchApplicationId = entry.SwitchApplicationId,
-                            BackloggdGameId = best.GameId,
-                            SteamTitle = rawTitle,
-                            BackloggdTitle = best.Title,
-                            ReleaseYear = best.ReleaseYear,
-                            ManualOverride = false,
-                            LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                        };
-                        if (entry.AppId != 0)
-                        {
-                            mappings.RemoveAll(m => m.AppId == entry.AppId);
-                            mappings.Add(map);
-                            DataStore.SaveMappings(mappings);
-                        }
-                    }
-
-                    if (map != null)
-                    {
-                        entry.BackloggdGameId = map.BackloggdGameId;
-                        if (!string.IsNullOrEmpty(map.BackloggdTitle))
-                        {
-                            entry.GameTitle = map.BackloggdTitle;
-                        }
-                    }
-
-                    int defaultPlatformId = string.Equals(entry.Platform, "Switch", StringComparison.OrdinalIgnoreCase) ? 130 : 6;
-                    SyncResult res = BackloggdClient.SyncSession(
-                        entry.BackloggdGameId,
-                        entry.DurationSeconds,
-                        entry.DateStr,
-                        settings,
-                        null,
-                        defaultPlatformId,
-                        entry.SetExactDayPlaytime);
-
-                    if (res.Success)
-                    {
-                        entry.Synced = true;
-                        entry.SyncError = null;
-                        entry.AccumulatedOnBackloggd = res.Accumulated;
-                        entry.TotalDayMinutesOnBackloggd = res.FinalDayHours * 60 + res.FinalDayMinutes;
-                        DataStore.Log(string.Format("Synced session to Backloggd: {0} ({1}) -> {2}h {3}m total on {4}",
-                            entry.GameTitle, entry.DateStr, res.FinalDayHours, res.FinalDayMinutes, entry.DateStr));
-                    }
-                    else
-                    {
-                        entry.Synced = false;
-                        entry.RetryCount += 1;
-                        entry.SyncError = res.Error;
-                        DataStore.Log(string.Format("Failed to sync {0}: {1}", entry.GameTitle, res.Error));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    entry.Synced = false;
-                    entry.RetryCount += 1;
-                    entry.SyncError = ex.Message;
-                    DataStore.Log(string.Format("Error syncing session {0}: {1}", entry.GameTitle, ex.Message));
-                }
-
-                DataStore.SaveSessions(sessions);
-                if (OnSessionSynced != null) OnSessionSynced(entry);
-            }
-        }
-
-        public string FetchAndSyncNintendoSwitchSummaries(bool allowInteractivePrompt, out int newOrUpdatedCount, bool fetchEntireHistory = false)
-        {
-            newOrUpdatedCount = 0;
-            var settings = DataStore.LoadSettings();
-            bool hasParentalToken = !string.IsNullOrWhiteSpace(settings.NintendoSessionToken);
-            bool hasStoreToken = !string.IsNullOrWhiteSpace(settings.NintendoStoreSessionToken);
-
-            if (!hasParentalToken && !hasStoreToken)
-            {
-                return "No Nintendo Account connected yet.";
-            }
-
-            var allDailyRecords = new List<NintendoDailyGameRecord>();
-            var allTimeStoreGames = new List<NintendoAllTimeGameRecord>();
-            int totalMonthsFetched = 0;
-            int devicesCount = 0;
-
-            if (hasParentalToken)
-            {
-                try
-                {
-                    string idToken, accessToken, nickname, accountId;
-                    NintendoSwitchClient.RefreshTokensAndProfile(settings.NintendoSessionToken, out idToken, out accessToken, out nickname, out accountId);
-
-                    if (!string.IsNullOrEmpty(nickname) && settings.NintendoAccountNickname != nickname)
-                    {
-                        settings.NintendoAccountNickname = nickname;
-                        settings.NintendoAccountId = accountId;
-                        DataStore.SaveSettings(settings);
-                    }
-
-                    var devices = NintendoSwitchClient.FetchOwnedDevices(idToken);
-                    devicesCount = devices.Count;
-                    foreach (var dev in devices)
-                    {
-                        if (fetchEntireHistory)
-                        {
-                            int mCount;
-                            var histRecs = NintendoSwitchClient.FetchAllHistoricalMonthlySummaries(idToken, dev, out mCount);
-                            totalMonthsFetched += mCount;
-                            allDailyRecords.AddRange(histRecs);
-                        }
-                        else
-                        {
-                            var recs = NintendoSwitchClient.FetchDailySummaries(idToken, dev, settings.NintendoSyncDaysBack);
-                            allDailyRecords.AddRange(recs);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    if (!hasStoreToken) throw;
-                    DataStore.Log("Parental Controls sync warning: " + ex.Message);
-                }
-            }
-
-            if (hasStoreToken)
-            {
-                List<NintendoAllTimeGameRecord> storeGames;
-                List<NintendoDailyGameRecord> storeDaily;
-                string storeNick;
-                NintendoSwitchClient.FetchStorePlayHistory(settings.NintendoStoreSessionToken, out storeGames, out storeDaily, out storeNick);
-                if (!string.IsNullOrEmpty(storeNick) && string.IsNullOrEmpty(settings.NintendoAccountNickname))
-                {
-                    settings.NintendoAccountNickname = storeNick;
-                    DataStore.SaveSettings(settings);
-                }
-                if (storeDaily != null) allDailyRecords.AddRange(storeDaily);
-                if (fetchEntireHistory && storeGames != null)
-                {
-                    allTimeStoreGames.AddRange(storeGames);
-                }
-            }
-
-            var sessions = DataStore.LoadSessions();
-            var mappings = DataStore.LoadMappings();
-            var sessionIdsToSync = new List<string>();
-
-            foreach (var rec in allDailyRecords)
-            {
-                int switchAppId = NintendoSwitchClient.GetStableSwitchAppId(rec.ApplicationId, rec.Title);
-                int durationSec = rec.PlayingTimeMinutes * 60;
-                if (durationSec < settings.MinSessionSeconds) continue;
-
-                var existingSession = sessions.Find(s =>
-                    s.DateStr == rec.DateStr &&
-                    s.AllTimeTotalMinutes <= 0 &&
-                    (s.AppId == switchAppId || (!string.IsNullOrEmpty(rec.ApplicationId) && s.SwitchApplicationId == rec.ApplicationId)));
-
-                if (existingSession != null)
-                {
-                    if (durationSec > existingSession.DurationSeconds || !existingSession.Synced)
-                    {
-                        existingSession.DurationSeconds = Math.Max(existingSession.DurationSeconds, durationSec);
-                        existingSession.Platform = "Switch";
-                        existingSession.SetExactDayPlaytime = true;
-                        existingSession.Synced = false;
-                        existingSession.SyncError = null;
-                        if (!sessionIdsToSync.Contains(existingSession.Id)) sessionIdsToSync.Add(existingSession.Id);
-                        newOrUpdatedCount++;
-                    }
-                }
-                else
-                {
-                    var existingMap = mappings.Find(m => m.AppId == switchAppId || (!string.IsNullOrEmpty(rec.ApplicationId) && m.SwitchApplicationId == rec.ApplicationId));
-                    var newEntry = new SessionEntry
-                    {
-                        Id = string.Format("nx_{0}_{1}", rec.DateStr.Replace("-", ""), Math.Abs(switchAppId)),
-                        Platform = "Switch",
-                        AppId = switchAppId,
-                        SwitchApplicationId = rec.ApplicationId,
-                        GameTitle = (existingMap != null && !string.IsNullOrEmpty(existingMap.BackloggdTitle)) ? existingMap.BackloggdTitle : rec.Title,
-                        BackloggdGameId = existingMap != null ? existingMap.BackloggdGameId : null,
-                        DateStr = rec.DateStr,
-                        StartTimeIso = rec.DateStr + "T12:00:00",
-                        EndTimeIso = rec.DateStr + "T12:00:00",
-                        DurationSeconds = durationSec,
-                        SetExactDayPlaytime = true,
-                        Synced = false
-                    };
-                    sessions.Insert(0, newEntry);
-                    sessionIdsToSync.Add(newEntry.Id);
-                    newOrUpdatedCount++;
-                }
-            }
-
-            // Reconcile All-Time Store Play History (covers all years 2017-present)
-            foreach (var g in allTimeStoreGames)
-            {
-                int switchAppId = NintendoSwitchClient.GetStableSwitchAppId(g.TitleId, g.TitleName);
-                int totalSec = g.TotalPlayedMinutes * 60;
-                if (totalSec < settings.MinSessionSeconds) continue;
-
-                // Calculate how many minutes of individual daily sessions we already have locally for this game
-                int localDailyMinutes = 0;
-                foreach (var s in sessions)
-                {
-                    if (s.AllTimeTotalMinutes <= 0 &&
-                        (s.AppId == switchAppId || (!string.IsNullOrEmpty(g.TitleId) && s.SwitchApplicationId == g.TitleId)))
-                    {
-                        localDailyMinutes += (int)Math.Round(s.DurationSeconds / 60.0);
-                    }
-                }
-
-                // Update English title on existing unmapped sessions if Nintendo Store returned a cleaner title
-                var existingMap = mappings.Find(m => m.AppId == switchAppId || (!string.IsNullOrEmpty(g.TitleId) && m.SwitchApplicationId == g.TitleId));
-                if (existingMap == null && !string.IsNullOrEmpty(g.TitleId) && !string.IsNullOrEmpty(g.TitleName))
-                {
-                    foreach (var s in sessions)
-                    {
-                        if (s.SwitchApplicationId == g.TitleId && !s.Synced)
-                        {
-                            s.GameTitle = g.TitleName;
-                        }
-                    }
-                }
-
-                int unloggedMins = Math.Max(0, g.TotalPlayedMinutes - localDailyMinutes);
-                if (unloggedMins <= 0) continue;
-
-                string allTimeId = string.Format("nx_alltime_{0}", Math.Abs(switchAppId));
-                var existingAllTime = sessions.Find(s => s.Id == allTimeId);
-                if (existingAllTime != null)
-                {
-                    if (g.TotalPlayedMinutes > existingAllTime.AllTimeTotalMinutes || !existingAllTime.Synced)
-                    {
-                        existingAllTime.AllTimeTotalMinutes = g.TotalPlayedMinutes;
-                        existingAllTime.FirstPlayedDate = g.FirstPlayedDate;
-                        existingAllTime.DateStr = g.FirstPlayedDate;
-                        existingAllTime.DurationSeconds = unloggedMins * 60;
-                        existingAllTime.Synced = false;
-                        existingAllTime.SyncError = null;
-                        if (!sessionIdsToSync.Contains(existingAllTime.Id)) sessionIdsToSync.Add(existingAllTime.Id);
-                        newOrUpdatedCount++;
-                    }
-                }
-                else
-                {
-                    var allTimeEntry = new SessionEntry
-                    {
-                        Id = allTimeId,
-                        Platform = "Switch",
-                        AppId = switchAppId,
-                        SwitchApplicationId = g.TitleId,
-                        GameTitle = (existingMap != null && !string.IsNullOrEmpty(existingMap.BackloggdTitle)) ? existingMap.BackloggdTitle : g.TitleName,
-                        BackloggdGameId = existingMap != null ? existingMap.BackloggdGameId : null,
-                        DateStr = g.FirstPlayedDate,
-                        FirstPlayedDate = g.FirstPlayedDate,
-                        StartTimeIso = g.FirstPlayedDate + "T12:00:00",
-                        EndTimeIso = g.LastPlayedDate + "T12:00:00",
-                        DurationSeconds = unloggedMins * 60,
-                        SetExactDayPlaytime = true,
-                        AllTimeTotalMinutes = g.TotalPlayedMinutes,
-                        Synced = false
-                    };
-                    sessions.Insert(0, allTimeEntry);
-                    sessionIdsToSync.Add(allTimeEntry.Id);
-                    newOrUpdatedCount++;
-                }
-            }
-
-            if (sessionIdsToSync.Count > 0)
-            {
-                sessions.Sort((a, b) => string.Compare(b.DateStr, a.DateStr, StringComparison.Ordinal));
-                DataStore.SaveSessions(sessions);
-
-                BatchSyncSessionsByGame(sessionIdsToSync, allowInteractivePrompt);
-            }
-
-            if (fetchEntireHistory)
-            {
-                return string.Format("Full History Sync complete ({0} monthly archive(s), {1} all-time Nintendo Store title(s)): {2} session(s) synced/updated.",
-                    totalMonthsFetched, allTimeStoreGames.Count, newOrUpdatedCount);
-            }
-
-            return string.Format("Checked Switch activity: {0} daily game session(s) synced/updated.", newOrUpdatedCount);
-        }
-
-        public void BatchSyncSessionsByGame(List<string> sessionIds, bool allowInteractivePrompt)
-        {
-            if (sessionIds == null || sessionIds.Count == 0) return;
-
-            lock (_syncLock)
-            {
-                var settings = DataStore.LoadSettings();
-                var sessions = DataStore.LoadSessions();
-                var mappings = DataStore.LoadMappings();
-
-                var idSet = new HashSet<string>(sessionIds);
-                var targetEntries = sessions.FindAll(s => idSet.Contains(s.Id) && !s.Synced);
-                if (targetEntries.Count == 0) return;
-
-                // Group by AppId so we resolve each game's mapping once and batch-POST all its dates in a single request
-                var byAppId = new Dictionary<int, List<SessionEntry>>();
-                foreach (var entry in targetEntries)
-                {
-                    if (!byAppId.ContainsKey(entry.AppId))
-                    {
-                        byAppId[entry.AppId] = new List<SessionEntry>();
-                    }
-                    byAppId[entry.AppId].Add(entry);
-                }
-
-                bool promptedOnce = false;
-                foreach (var kv in byAppId)
-                {
-                    int appId = kv.Key;
-                    List<SessionEntry> group = kv.Value;
-                    SessionEntry first = group[0];
-
-                    // If only 1 regular daily date for this game, use standard SyncSessionEntryAsync
-                    if (group.Count == 1 && first.AllTimeTotalMinutes <= 0)
-                    {
-                        SyncSessionEntryAsync(first.Id, allowInteractivePrompt && !promptedOnce);
-                        if (!first.Synced) promptedOnce = true;
-                        continue;
-                    }
-
-                    try
-                    {
-                        var map = appId != 0 ? mappings.Find(m => m.AppId == appId) : null;
-                        if ((map == null || string.IsNullOrEmpty(map.BackloggdGameId)) && string.IsNullOrEmpty(first.BackloggdGameId))
-                        {
-                            string rawTitle = appId > 0 ? ResolveSteamGameTitle(appId) : (first.GameTitle ?? "");
-                            string cleanTitle = BackloggdClient.CleanGameTitle(rawTitle);
-                            var searchResults = BackloggdClient.SearchGame(cleanTitle, settings);
-                            if (searchResults.Count == 0 && cleanTitle != rawTitle)
-                            {
-                                searchResults = BackloggdClient.SearchGame(rawTitle, settings);
-                            }
-
-                            var best = BackloggdClient.SelectBestMatch(cleanTitle, searchResults);
-                            if (best == null)
-                            {
-                                if (allowInteractivePrompt && !promptedOnce && OnUnmappedGamePromptRequested != null)
-                                {
-                                    promptedOnce = true;
-                                    foreach (var g in group) g.SyncError = "Waiting for game selection...";
-                                    DataStore.SaveSessions(sessions);
-                                    OnUnmappedGamePromptRequested(first, rawTitle, searchResults);
-                                }
-                                else
-                                {
-                                    foreach (var g in group)
-                                    {
-                                        g.SyncError = string.Format("Unmapped game \"{0}\". Double-click to select on Backloggd.", rawTitle);
-                                    }
-                                    DataStore.SaveSessions(sessions);
-                                }
-                                continue;
-                            }
-
-                            map = new GameMapping
-                            {
-                                AppId = appId,
-                                SwitchApplicationId = first.SwitchApplicationId,
-                                BackloggdGameId = best.GameId,
-                                SteamTitle = rawTitle,
-                                BackloggdTitle = best.Title,
-                                ReleaseYear = best.ReleaseYear,
-                                ManualOverride = false,
-                                LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                            };
-                            mappings.RemoveAll(m => m.AppId == appId);
-                            mappings.Add(map);
-                            DataStore.SaveMappings(mappings);
-                        }
-
-                        string gameId = (map != null && !string.IsNullOrEmpty(map.BackloggdGameId)) ? map.BackloggdGameId : first.BackloggdGameId;
-                        string resolvedTitle = (map != null && !string.IsNullOrEmpty(map.BackloggdTitle)) ? map.BackloggdTitle : first.GameTitle;
-
-                        foreach (var g in group)
-                        {
-                            g.BackloggdGameId = gameId;
-                            if (!string.IsNullOrEmpty(resolvedTitle)) g.GameTitle = resolvedTitle;
-                        }
-
-                        int defaultPlatformId = string.Equals(first.Platform, "Switch", StringComparison.OrdinalIgnoreCase) ? 130 : 6;
-                        SyncResult res = BackloggdClient.SyncBatchSessionsForGame(gameId, group, settings, defaultPlatformId);
-                        if (res.Success)
-                        {
-                            foreach (var g in group)
-                            {
-                                g.Synced = true;
-                                g.SyncError = null;
-                                g.TotalDayMinutesOnBackloggd = (int)Math.Round(g.DurationSeconds / 60.0);
-                            }
-                            DataStore.Log(string.Format("Batch-synced {0} historical day(s) for {1} to Backloggd -> {2}h {3}m total playthrough",
-                                group.Count, resolvedTitle, res.FinalDayHours, res.FinalDayMinutes));
-                        }
-                        else
-                        {
-                            foreach (var g in group)
-                            {
-                                g.Synced = false;
-                                g.RetryCount += 1;
-                                g.SyncError = res.Error;
-                            }
-                        }
-                        DataStore.SaveSessions(sessions);
-                        if (OnSessionSynced != null) OnSessionSynced(first);
-                    }
-                    catch (Exception ex)
-                    {
-                        foreach (var g in group)
-                        {
-                            g.Synced = false;
-                            g.SyncError = ex.Message;
-                        }
-                        DataStore.SaveSessions(sessions);
-                    }
-                }
+                ThreadPool.QueueUserWorkItem(_ => _syncService.SyncSessionEntryAsync(entry.Id, true));
             }
         }
 
@@ -766,188 +234,35 @@ namespace BackloggdAutoSync
             return 0;
         }
 
+        // Delegating helper methods for compatibility
         public string ResolveSteamGameTitle(int appId)
         {
-            if (_titleCache.ContainsKey(appId))
-            {
-                return _titleCache[appId];
-            }
-
-            // 1. Check saved mappings
-            var mappings = DataStore.LoadMappings();
-            var m = mappings.Find(x => x.AppId == appId);
-            if (m != null && !string.IsNullOrEmpty(m.SteamTitle) && !m.SteamTitle.StartsWith("Steam App "))
-            {
-                _titleCache[appId] = m.SteamTitle;
-                return m.SteamTitle;
-            }
-
-            // 2. Check Registry HKCU\Software\Valve\Steam\Apps\<AppID> -> Name
-            try
-            {
-                using (RegistryKey appKey = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam\Apps\" + appId))
-                {
-                    if (appKey != null)
-                    {
-                        string regName = appKey.GetValue("Name") as string;
-                        if (!string.IsNullOrWhiteSpace(regName))
-                        {
-                            _titleCache[appId] = regName.Trim();
-                            return _titleCache[appId];
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            // 3. Check Steam appmanifest_<AppID>.acf across all Steam library folders
-            try
-            {
-                string acfTitle = FindTitleFromSteamManifests(appId);
-                if (!string.IsNullOrWhiteSpace(acfTitle))
-                {
-                    _titleCache[appId] = acfTitle.Trim();
-                    return _titleCache[appId];
-                }
-            }
-            catch { }
-
-            // 4. Fallback to Steam Store API
-            try
-            {
-                HttpWebRequest req = (HttpWebRequest)WebRequest.Create("https://store.steampowered.com/api/appdetails?appids=" + appId);
-                req.UserAgent = "Mozilla/5.0";
-                req.Timeout = 8000;
-                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
-                using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
-                {
-                    string json = sr.ReadToEnd();
-                    Match nameMatch = Regex.Match(json, @"""name""\s*:\s*""((?:\\.|[^""\\])*)""");
-                    if (nameMatch.Success)
-                    {
-                        string rawName = Regex.Unescape(nameMatch.Groups[1].Value).Trim();
-                        if (!string.IsNullOrEmpty(rawName))
-                        {
-                            _titleCache[appId] = rawName;
-                            return rawName;
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            return "Steam App " + appId;
-        }
-
-        private static bool IsNullOrSpace(string s)
-        {
-            return string.IsNullOrWhiteSpace(s);
+            return SteamLibrary.ResolveSteamGameTitle(appId);
         }
 
         public static List<string> GetSteamAppsDirectories()
         {
-            var libraryDirs = new List<string>();
-            try
-            {
-                string steamPath = null;
-                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam"))
-                {
-                    if (key != null)
-                    {
-                        steamPath = key.GetValue("SteamPath") as string;
-                    }
-                }
-                if (string.IsNullOrEmpty(steamPath)) return libraryDirs;
-                steamPath = steamPath.Replace('/', '\\');
-
-                string defaultSteamApps = Path.Combine(steamPath, "steamapps");
-                if (Directory.Exists(defaultSteamApps)) libraryDirs.Add(defaultSteamApps);
-
-                string vdfPath = Path.Combine(defaultSteamApps, "libraryfolders.vdf");
-                if (File.Exists(vdfPath))
-                {
-                    string vdf = File.ReadAllText(vdfPath, Encoding.UTF8);
-                    MatchCollection pathMatches = Regex.Matches(vdf, @"""path""\s+""([^""]+)""", RegexOptions.IgnoreCase);
-                    foreach (Match pm in pathMatches)
-                    {
-                        string libRoot = pm.Groups[1].Value.Replace(@"\\", @"\");
-                        string sa = Path.Combine(libRoot, "steamapps");
-                        if (Directory.Exists(sa) && !libraryDirs.Contains(sa))
-                        {
-                            libraryDirs.Add(sa);
-                        }
-                    }
-                }
-            }
-            catch { }
-            return libraryDirs;
+            return SteamLibrary.GetSteamAppsDirectories();
         }
 
         public static List<InstalledSteamGame> GetInstalledSteamGames(List<int> ignoredAppIds = null)
         {
-            var games = new List<InstalledSteamGame>();
-            var seenIds = new HashSet<int>();
-
-            foreach (string saDir in GetSteamAppsDirectories())
-            {
-                try
-                {
-                    string[] acfFiles = Directory.GetFiles(saDir, "appmanifest_*.acf");
-                    foreach (string acfPath in acfFiles)
-                    {
-                        try
-                        {
-                            string acf = File.ReadAllText(acfPath, Encoding.UTF8);
-                            Match idMatch = Regex.Match(acf, @"""appid""\s+""(\d+)""", RegexOptions.IgnoreCase);
-                            Match nameMatch = Regex.Match(acf, @"""name""\s+""([^""]+)""", RegexOptions.IgnoreCase);
-                            if (idMatch.Success && nameMatch.Success)
-                            {
-                                int appId = Convert.ToInt32(idMatch.Groups[1].Value);
-                                string name = nameMatch.Groups[1].Value.Trim();
-
-                                if (ignoredAppIds != null && ignoredAppIds.Contains(appId)) continue;
-                                if (name.IndexOf("Proton ", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                    name.IndexOf("Steamworks Common", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                    name.IndexOf("Steam Linux Runtime", StringComparison.OrdinalIgnoreCase) >= 0)
-                                {
-                                    continue;
-                                }
-
-                                if (appId > 0 && !seenIds.Contains(appId))
-                                {
-                                    seenIds.Add(appId);
-                                    games.Add(new InstalledSteamGame { AppId = appId, Title = name });
-                                }
-                            }
-                        }
-                        catch { }
-                    }
-                }
-                catch { }
-            }
-
-            games.Sort((a, b) => string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase));
-            return games;
+            return SteamLibrary.GetInstalledSteamGames(ignoredAppIds);
         }
 
-        private static string FindTitleFromSteamManifests(int appId)
+        public void SyncSessionEntryAsync(string sessionId, bool allowInteractivePrompt = false)
         {
-            string manifestFile = string.Format("appmanifest_{0}.acf", appId);
-            foreach (string dir in GetSteamAppsDirectories())
-            {
-                string fullPath = Path.Combine(dir, manifestFile);
-                if (File.Exists(fullPath))
-                {
-                    string acf = File.ReadAllText(fullPath, Encoding.UTF8);
-                    Match m = Regex.Match(acf, @"""name""\s+""([^""]+)""", RegexOptions.IgnoreCase);
-                    if (m.Success)
-                    {
-                        return m.Groups[1].Value;
-                    }
-                }
-            }
+            _syncService.SyncSessionEntryAsync(sessionId, allowInteractivePrompt);
+        }
 
-            return null;
+        public void BatchSyncSessionsByGame(List<string> sessionIds, bool allowInteractivePrompt)
+        {
+            _syncService.BatchSyncSessionsByGame(sessionIds, allowInteractivePrompt);
+        }
+
+        public string FetchAndSyncNintendoSwitchSummaries(bool allowInteractivePrompt, out int newOrUpdatedCount, bool fetchEntireHistory = false)
+        {
+            return _syncService.FetchAndSyncNintendoSwitchSummaries(allowInteractivePrompt, out newOrUpdatedCount, fetchEntireHistory);
         }
     }
 }

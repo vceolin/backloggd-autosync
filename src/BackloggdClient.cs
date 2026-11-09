@@ -9,15 +9,6 @@ using System.Web.Script.Serialization;
 
 namespace BackloggdAutoSync
 {
-    public class SessionValidationResult
-    {
-        public bool Valid { get; set; }
-        public string CsrfToken { get; set; }
-        public string Username { get; set; }
-        public string UserId { get; set; }
-        public string Error { get; set; }
-    }
-
     public static class BackloggdClient
     {
         private const string BaseUrl = "https://backloggd.com";
@@ -32,7 +23,7 @@ namespace BackloggdAutoSync
         public static string NormalizeCookie(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw)) return "";
-            string c = raw.Trim();
+            string c = raw.Trim().Trim('"', '\'').Trim();
 
             Match sessionMatch = Regex.Match(c, @"(?:^|;\s*)_backloggd_session=([^;]+)");
             if (sessionMatch.Success)
@@ -314,42 +305,12 @@ namespace BackloggdAutoSync
 
         public static string CleanGameTitle(string rawTitle)
         {
-            if (string.IsNullOrWhiteSpace(rawTitle)) return "";
-            string t = Regex.Replace(rawTitle, @"[™®©]", "");
-            t = Regex.Replace(t, @"\s*-\s*(?:Digital\s+)?(?:Deluxe|Collector's|Definitive|Game of the Year|GOTY|Enhanced|Special|Director's Cut|Remastered|Complete|Ultimate|Standard|Edition).*$", "", RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"\s*\((?:Standard|Deluxe|Definitive|Collector's|Enhanced|Remastered|GOTY)\s+Edition\)", "", RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"\s+", " ").Trim();
-            return t;
+            return GameTitleMatcher.CleanGameTitle(rawTitle);
         }
 
         public static GameSearchResult SelectBestMatch(string targetTitle, List<GameSearchResult> results)
         {
-            if (results == null || results.Count == 0) return null;
-
-            string normTarget = Regex.Replace(targetTitle.ToLowerInvariant(), @"[^a-z0-9]", "");
-            if (string.IsNullOrEmpty(normTarget)) return null;
-
-            // 1. Exact normalized match
-            foreach (var r in results)
-            {
-                string normRes = Regex.Replace(r.Title.ToLowerInvariant(), @"[^a-z0-9]", "");
-                if (normRes == normTarget) return r;
-            }
-
-            // 2. Prefix match
-            foreach (var r in results)
-            {
-                string normRes = Regex.Replace(r.Title.ToLowerInvariant(), @"[^a-z0-9]", "");
-                if (!string.IsNullOrEmpty(normRes) && (normRes.StartsWith(normTarget) || normTarget.StartsWith(normRes)))
-                {
-                    return r;
-                }
-            }
-
-            // If only 1 result came back from Backloggd autocomplete, use it
-            if (results.Count == 1) return results[0];
-
-            return null;
+            return GameTitleMatcher.SelectBestMatch(targetTitle, results);
         }
 
         public static GameLogStatus GetGameLogStatus(string gameId, AppSettings settings)
@@ -385,7 +346,7 @@ namespace BackloggdAutoSync
                 throw new Exception(string.Format("Failed to fetch log status for game {0} (HTTP {1})", gameId, res.StatusCode));
             }
 
-            var serializer = new JavaScriptSerializer();
+            var serializer = DataStore.CreateSerializer();
             var data = serializer.Deserialize<Dictionary<string, object>>(res.Body);
             var status = new GameLogStatus();
 
@@ -508,6 +469,19 @@ namespace BackloggdAutoSync
             }
         }
 
+        private static string BuildFormUrlEncoded(List<KeyValuePair<string, string>> formPairs)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < formPairs.Count; i++)
+            {
+                if (i > 0) sb.Append("&");
+                sb.Append(Uri.EscapeDataString(formPairs[i].Key));
+                sb.Append("=");
+                sb.Append(Uri.EscapeDataString(formPairs[i].Value ?? ""));
+            }
+            return sb.ToString();
+        }
+
         public static SyncResult SyncSession(string gameId, int durationSec, string dateStr, AppSettings settings, string note = null, int defaultPlatformId = 6, bool setExactDayTotal = false)
         {
             var result = new SyncResult
@@ -524,17 +498,8 @@ namespace BackloggdAutoSync
             }
             string nextDayStr = parsedDate.AddDays(1).ToString("yyyy-MM-dd");
 
-            int addHours = durationSec / 3600;
-            int addMins = (int)Math.Round((durationSec % 3600) / 60.0);
-            if (addMins == 60)
-            {
-                addHours += 1;
-                addMins = 0;
-            }
-            if (addHours == 0 && addMins == 0 && durationSec >= 30)
-            {
-                addMins = 1;
-            }
+            int addHours, addMins;
+            TimeUtils.CalculatePlaytime(durationSec, out addHours, out addMins);
 
             GameLogStatus logStatus = GetGameLogStatus(gameId, settings);
 
@@ -684,15 +649,7 @@ namespace BackloggdAutoSync
             formPairs.Add(new KeyValuePair<string, string>("log[game_liked]", logStatus.GameLiked ? "true" : "false"));
             formPairs.Add(new KeyValuePair<string, string>("modal_type", "full"));
 
-            var sb = new StringBuilder();
-            for (int i = 0; i < formPairs.Count; i++)
-            {
-                if (i > 0) sb.Append("&");
-                sb.Append(Uri.EscapeDataString(formPairs[i].Key));
-                sb.Append("=");
-                sb.Append(Uri.EscapeDataString(formPairs[i].Value ?? ""));
-            }
-            string formBody = sb.ToString();
+            string formBody = BuildFormUrlEncoded(formPairs);
 
             string saveUrl = !string.IsNullOrEmpty(settings.UserId)
                 ? string.Format("{0}/api/user/{1}/log/{2}", BaseUrl, settings.UserId, gameId)
@@ -746,12 +703,6 @@ namespace BackloggdAutoSync
                 return result;
             }
 
-            if (entries.Count == 1 && entries[0].AllTimeTotalMinutes <= 0)
-            {
-                var single = entries[0];
-                return SyncSession(gameId, single.DurationSeconds, single.DateStr, settings, null, defaultPlatformId, single.SetExactDayPlaytime);
-            }
-
             GameLogStatus logStatus = GetGameLogStatus(gameId, settings);
             string defaultPtTitle = defaultPlatformId == 130 ? "Nintendo Switch" : "Windows PC";
             bool isNewLog = !(logStatus.IsLogged && logStatus.PlaythroughId.HasValue);
@@ -767,14 +718,13 @@ namespace BackloggdAutoSync
                 if (d.id <= nextNegativeId) nextNegativeId = d.id - 1;
             }
 
-            SessionEntry allTimeEntry = null;
+            // Aggregate incoming sessions by DateStr (handling multiple AppIds mapped to the same Backloggd game on the same date)
+            var perDateAndAppSeconds = new Dictionary<string, Dictionary<int, int>>(StringComparer.OrdinalIgnoreCase);
+            var perDateSetExact = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var sess in entries)
             {
-                if (sess.AllTimeTotalMinutes > 0)
-                {
-                    allTimeEntry = sess;
-                    continue;
-                }
+                if (sess == null || sess.AllTimeTotalMinutes > 0) continue;
 
                 DateTime parsedDate;
                 string dateStr = sess.DateStr;
@@ -783,117 +733,136 @@ namespace BackloggdAutoSync
                     parsedDate = DateTime.Today;
                     dateStr = parsedDate.ToString("yyyy-MM-dd");
                 }
+                else
+                {
+                    dateStr = parsedDate.ToString("yyyy-MM-dd");
+                }
+
+                if (!perDateAndAppSeconds.ContainsKey(dateStr))
+                {
+                    perDateAndAppSeconds[dateStr] = new Dictionary<int, int>();
+                    perDateSetExact[dateStr] = sess.SetExactDayPlaytime;
+                }
+                else if (sess.SetExactDayPlaytime)
+                {
+                    perDateSetExact[dateStr] = true;
+                }
+
+                var appDict = perDateAndAppSeconds[dateStr];
+                if (appDict.ContainsKey(sess.AppId))
+                {
+                    appDict[sess.AppId] = sess.SetExactDayPlaytime
+                        ? Math.Max(appDict[sess.AppId], sess.DurationSeconds)
+                        : (appDict[sess.AppId] + sess.DurationSeconds);
+                }
+                else
+                {
+                    appDict[sess.AppId] = sess.DurationSeconds;
+                }
+            }
+
+            var sortedDates = new List<string>(perDateAndAppSeconds.Keys);
+            sortedDates.Sort(StringComparer.Ordinal);
+            var incomingDateSet = new HashSet<string>(sortedDates, StringComparer.OrdinalIgnoreCase);
+
+            foreach (string dateStr in sortedDates)
+            {
+                DateTime parsedDate = DateTime.Parse(dateStr);
                 string nextDayStr = parsedDate.AddDays(1).ToString("yyyy-MM-dd");
 
-                int addHours = sess.DurationSeconds / 3600;
-                int addMins = (int)Math.Round((sess.DurationSeconds % 3600) / 60.0);
-                if (addMins == 60) { addHours += 1; addMins = 0; }
-                if (addHours == 0 && addMins == 0 && sess.DurationSeconds >= 30) addMins = 1;
+                int combinedDaySeconds = 0;
+                foreach (var sec in perDateAndAppSeconds[dateStr].Values)
+                {
+                    combinedDaySeconds += sec;
+                }
+
+                int addHours, addMins;
+                TimeUtils.CalculatePlaytime(combinedDaySeconds, out addHours, out addMins);
+                bool setExactDay = perDateSetExact[dateStr];
 
                 int existingIdx = existingDates.FindIndex(d => d.range_start_date == dateStr);
                 if (existingIdx >= 0)
                 {
                     PlayDateEntry existing = existingDates[existingIdx];
-                    int totalMinutes = sess.SetExactDayPlaytime
-                        ? Math.Max(existing.hours * 60 + existing.minutes, addHours * 60 + addMins)
-                        : (existing.hours * 60 + existing.minutes + addHours * 60 + addMins);
-                    existing.hours = totalMinutes / 60;
-                    existing.minutes = totalMinutes % 60;
-                    existing.edited = true;
+                    bool isLegacyAllTime = existing.note != null &&
+                                           existing.note.IndexOf("All-Time History", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                    int existingTotalMins = existing.hours * 60 + existing.minutes;
+                    int incomingTotalMins = addHours * 60 + addMins;
+                    int targetTotalMins = (isLegacyAllTime || setExactDay)
+                        ? incomingTotalMins
+                        : (existingTotalMins + incomingTotalMins);
+
+                    int newHours = targetTotalMins / 60;
+                    int newMins = targetTotalMins % 60;
+
+                    if (existing.hours != newHours || existing.minutes != newMins || isLegacyAllTime)
+                    {
+                        existing.hours = newHours;
+                        existing.minutes = newMins;
+                        if (isLegacyAllTime) existing.note = "";
+                        existing.edited = true;
+                    }
                 }
                 else
                 {
-                    existingDates.Add(new PlayDateEntry
+                    // Check if we can repurpose an unclaimed legacy "All-Time History" PlayDateEntry
+                    int unclaimedAllTimeIdx = existingDates.FindIndex(d =>
+                        d.id > 0 &&
+                        !d.edited &&
+                        d.note != null &&
+                        d.note.IndexOf("All-Time History", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        !incomingDateSet.Contains(d.range_start_date ?? ""));
+
+                    if (unclaimedAllTimeIdx >= 0)
                     {
-                        id = nextNegativeId--,
-                        range_start_date = dateStr,
-                        range_end_date = nextDayStr,
-                        hours = addHours,
-                        minutes = addMins,
-                        status = 5,
-                        note = "",
-                        edited = true,
-                        tags = new List<string>()
-                    });
+                        PlayDateEntry repurposed = existingDates[unclaimedAllTimeIdx];
+                        repurposed.range_start_date = dateStr;
+                        repurposed.range_end_date = nextDayStr;
+                        repurposed.hours = addHours;
+                        repurposed.minutes = addMins;
+                        repurposed.note = "";
+                        repurposed.edited = true;
+                    }
+                    else
+                    {
+                        existingDates.Add(new PlayDateEntry
+                        {
+                            id = nextNegativeId--,
+                            range_start_date = dateStr,
+                            range_end_date = nextDayStr,
+                            hours = addHours,
+                            minutes = addMins,
+                            status = 5,
+                            note = "",
+                            edited = true,
+                            tags = new List<string>()
+                        });
+                    }
                 }
             }
 
-            // Reconcile All-Time Total Minutes from Nintendo Store (playHistories) if present
-            string inferredStartDate = logStatus.StartDate;
-            if (allTimeEntry != null && allTimeEntry.AllTimeTotalMinutes > 0)
+            // Remove any remaining legacy "All-Time History" entries that were not matched or repurposed
+            var deletedDateIds = new List<int>();
+            for (int i = existingDates.Count - 1; i >= 0; i--)
             {
-                if (string.IsNullOrEmpty(inferredStartDate) && !string.IsNullOrEmpty(allTimeEntry.FirstPlayedDate))
+                var d = existingDates[i];
+                if (d.note != null && d.note.IndexOf("All-Time History", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    inferredStartDate = allTimeEntry.FirstPlayedDate;
+                    if (d.id > 0) deletedDateIds.Add(d.id);
+                    existingDates.RemoveAt(i);
                 }
+            }
 
-                int loggedDailyMinutes = 0;
-                int prevAllTimeIdx = -1;
-                for (int i = 0; i < existingDates.Count; i++)
+            string inferredStartDate = logStatus.StartDate;
+            foreach (var d in existingDates)
+            {
+                if (!string.IsNullOrEmpty(d.range_start_date))
                 {
-                    var d = existingDates[i];
-                    if (d.note != null && d.note.IndexOf("All-Time History", StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (string.IsNullOrEmpty(inferredStartDate) ||
+                        string.Compare(d.range_start_date, inferredStartDate, StringComparison.Ordinal) < 0)
                     {
-                        prevAllTimeIdx = i;
-                    }
-                    else
-                    {
-                        loggedDailyMinutes += d.hours * 60 + d.minutes;
-                    }
-                }
-
-                int remainingHistoricalMinutes = Math.Max(0, allTimeEntry.AllTimeTotalMinutes - loggedDailyMinutes);
-                if (remainingHistoricalMinutes > 0)
-                {
-                    string startStr = !string.IsNullOrEmpty(allTimeEntry.FirstPlayedDate) ? allTimeEntry.FirstPlayedDate : allTimeEntry.DateStr;
-                    DateTime parsedStart;
-                    if (!DateTime.TryParse(startStr, out parsedStart)) parsedStart = DateTime.Today;
-                    string endStr = parsedStart.AddDays(1).ToString("yyyy-MM-dd");
-
-                    int h = remainingHistoricalMinutes / 60;
-                    int m = remainingHistoricalMinutes % 60;
-                    string histNote = string.Format("All-Time History (Nintendo Store: {0}h {1}m total)",
-                        allTimeEntry.AllTimeTotalMinutes / 60, allTimeEntry.AllTimeTotalMinutes % 60);
-
-                    if (prevAllTimeIdx >= 0)
-                    {
-                        var existing = existingDates[prevAllTimeIdx];
-                        if (existing.hours != h || existing.minutes != m)
-                        {
-                            existing.hours = h;
-                            existing.minutes = m;
-                            existing.note = histNote;
-                            existing.edited = true;
-                        }
-                    }
-                    else
-                    {
-                        int sameDateIdx = existingDates.FindIndex(d => d.range_start_date == startStr);
-                        if (sameDateIdx >= 0)
-                        {
-                            var existing = existingDates[sameDateIdx];
-                            int combined = existing.hours * 60 + existing.minutes + remainingHistoricalMinutes;
-                            existing.hours = combined / 60;
-                            existing.minutes = combined % 60;
-                            existing.note = string.IsNullOrEmpty(existing.note) ? histNote : existing.note;
-                            existing.edited = true;
-                        }
-                        else
-                        {
-                            existingDates.Add(new PlayDateEntry
-                            {
-                                id = nextNegativeId--,
-                                range_start_date = startStr,
-                                range_end_date = endStr,
-                                hours = h,
-                                minutes = m,
-                                status = 5,
-                                note = histNote,
-                                edited = true,
-                                start_date = string.IsNullOrEmpty(logStatus.StartDate) ? startStr : null,
-                                tags = new List<string>()
-                            });
-                        }
+                        inferredStartDate = d.range_start_date;
                     }
                 }
             }
@@ -904,14 +873,10 @@ namespace BackloggdAutoSync
             {
                 totalMinsAll += d.hours * 60 + d.minutes;
             }
-            if (allTimeEntry != null && allTimeEntry.AllTimeTotalMinutes > totalMinsAll)
-            {
-                totalMinsAll = allTimeEntry.AllTimeTotalMinutes;
-            }
             int ptHours = totalMinsAll / 60;
             int ptMins = totalMinsAll % 60;
 
-            if (editedDates.Count == 0 && !isNewLog && (logStatus.HoursPlayed * 60 + logStatus.MinsPlayed) >= totalMinsAll)
+            if (editedDates.Count == 0 && deletedDateIds.Count == 0 && !isNewLog && (logStatus.HoursPlayed * 60 + logStatus.MinsPlayed) == totalMinsAll)
             {
                 result.Success = true;
                 result.FinalDayHours = ptHours;
@@ -944,6 +909,10 @@ namespace BackloggdAutoSync
             }
 
             string ptKey = playthroughId.ToString();
+            foreach (int delId in deletedDateIds)
+            {
+                formPairs.Add(new KeyValuePair<string, string>(string.Format("deleted_dates[{0}][]", ptKey), delId.ToString()));
+            }
             for (int i = 0; i < editedDates.Count; i++)
             {
                 var d = editedDates[i];
@@ -977,15 +946,7 @@ namespace BackloggdAutoSync
             formPairs.Add(new KeyValuePair<string, string>("log[game_liked]", logStatus.GameLiked ? "true" : "false"));
             formPairs.Add(new KeyValuePair<string, string>("modal_type", "full"));
 
-            var sb = new StringBuilder();
-            for (int i = 0; i < formPairs.Count; i++)
-            {
-                if (i > 0) sb.Append("&");
-                sb.Append(Uri.EscapeDataString(formPairs[i].Key));
-                sb.Append("=");
-                sb.Append(Uri.EscapeDataString(formPairs[i].Value ?? ""));
-            }
-            string formBody = sb.ToString();
+            string formBody = BuildFormUrlEncoded(formPairs);
 
             string saveUrl = !string.IsNullOrEmpty(settings.UserId)
                 ? string.Format("{0}/api/user/{1}/log/{2}", BaseUrl, settings.UserId, gameId)

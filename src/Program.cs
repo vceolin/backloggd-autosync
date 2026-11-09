@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -6,6 +7,16 @@ namespace BackloggdAutoSync
 {
     static class Program
     {
+        public const string AppShowMessageName = "BackloggdAutoSync_ShowMainWindow";
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern uint RegisterWindowMessage(string lpString);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        private const int HWND_BROADCAST = 0xffff;
+
         [STAThread]
         static void Main(string[] args)
         {
@@ -14,11 +25,9 @@ namespace BackloggdAutoSync
             {
                 if (!createdNew)
                 {
-                    MessageBox.Show(
-                        "Backloggd AutoSync is already running! Check your Windows System Tray (bottom-right corner).",
-                        "Backloggd AutoSync",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
+                    // Existing instance is running. Wake it up and restore its window to the foreground.
+                    uint showMsg = RegisterWindowMessage(AppShowMessageName);
+                    PostMessage((IntPtr)HWND_BROADCAST, showMsg, IntPtr.Zero, IntPtr.Zero);
                     return;
                 }
 
