@@ -101,5 +101,52 @@ namespace BackloggdAutoSync.Tests
             Assert.AreEqual(cp.GameTitle, deserialized.GameTitle);
             Assert.AreEqual(cp.ElapsedSeconds, deserialized.ElapsedSeconds);
         }
+
+        [Test]
+        public void Should_Serialize_And_Deserialize_CollectionEntry_And_Format_Labels()
+        {
+            var entry = new CollectionEntry
+            {
+                Id = "nx_7346",
+                Source = "Nintendo Switch",
+                AppId = -7346,
+                SwitchApplicationId = "01007ef00011e000",
+                LocalTitle = "The Legend of Zelda: Breath of the Wild",
+                BackloggdGameId = "7346",
+                BackloggdTitle = "The Legend of Zelda: Breath of the Wild",
+                BackloggdLibraryEntryId = "555111",
+                PlatformId = 130,
+                OwnershipId = 0, // Physical
+                StorefrontId = null,
+                EditionId = "999",
+                EditionTitle = "Master Edition",
+                Synced = true
+            };
+
+            Assert.AreEqual("Nintendo Switch", entry.GetPlatformDisplayName());
+            Assert.AreEqual("Physical", entry.GetOwnershipDisplayName());
+            Assert.AreEqual("—", entry.GetStorefrontDisplayName());
+
+            entry.OwnershipId = 1; // Digital
+            entry.StorefrontId = 8; // Nintendo eShop
+            entry.PlatformId = 508; // Nintendo Switch 2
+            Assert.AreEqual("Nintendo Switch 2", entry.GetPlatformDisplayName());
+            Assert.AreEqual("Digital", entry.GetOwnershipDisplayName());
+            Assert.AreEqual("Nintendo eShop", entry.GetStorefrontDisplayName());
+
+            var serializer = DataStore.CreateSerializer();
+            string json = serializer.Serialize(entry);
+            var deserialized = serializer.Deserialize<CollectionEntry>(json);
+
+            Assert.IsNotNull(deserialized);
+            Assert.AreEqual(entry.Id, deserialized.Id);
+            Assert.AreEqual(entry.Source, deserialized.Source);
+            Assert.AreEqual(entry.PlatformId, deserialized.PlatformId);
+            Assert.AreEqual(entry.OwnershipId, deserialized.OwnershipId);
+            Assert.AreEqual(entry.StorefrontId, deserialized.StorefrontId);
+            Assert.AreEqual(entry.EditionId, deserialized.EditionId);
+            Assert.AreEqual(entry.EditionTitle, deserialized.EditionTitle);
+            Assert.AreEqual(entry.Synced, deserialized.Synced);
+        }
     }
 }

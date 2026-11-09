@@ -52,7 +52,21 @@ namespace BackloggdAutoSync
         private Button _btnManualLog;
         private Button _btnDeleteSession;
 
-        // Tab 2: Game Mappings (Auto-Suggest UI)
+        // Tab 2: Collection / Library Entries
+        private Label _lblCollectionSummary;
+        private ComboBox _cmbCollectionFilter;
+        private TextBox _txtCollectionSearch;
+        private CheckBox _chkCollectionShowHidden;
+        private Button _btnScanCollection;
+        private Button _btnAutoMatchCollection;
+        private Button _btnEditCollectionEntry;
+        private Button _btnTogglePhysicalDigital;
+        private Button _btnSyncSelectedCollection;
+        private Button _btnSyncAllCollection;
+        private ListView _lvCollection;
+        private bool _collectionLoadedOnce = false;
+
+        // Tab 3: Game Mappings (Auto-Suggest UI)
         private ComboBox _cmbInstalledGames;
         private Button _btnAutoMatchAllInstalled;
         private TextBox _txtMapAppId;
@@ -362,22 +376,30 @@ namespace BackloggdAutoSync
             };
 
             var tabSessions = new TabPage("Daily Diary & Sessions") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
+            var tabCollection = new TabPage("Collection / Library") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
             var tabMappings = new TabPage("Game Mappings (Auto-Suggest)") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
             var tabSwitch = new TabPage("Nintendo Switch Sync") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
             var tabSettings = new TabPage("Backloggd Account & Settings") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
 
             BuildSessionsTab(tabSessions);
+            BuildCollectionTab(tabCollection);
             BuildMappingsTab(tabMappings);
             BuildNintendoSwitchTab(tabSwitch);
             BuildSettingsTab(tabSettings);
 
             _tabControl.TabPages.Add(tabSessions);
+            _tabControl.TabPages.Add(tabCollection);
             _tabControl.TabPages.Add(tabMappings);
             _tabControl.TabPages.Add(tabSwitch);
             _tabControl.TabPages.Add(tabSettings);
             _tabControl.SelectedIndexChanged += (s, e) =>
             {
-                if (_tabControl.SelectedIndex == 1 && _cmbInstalledGames.Items.Count == 0)
+                if (_tabControl.SelectedTab == tabCollection && !_collectionLoadedOnce)
+                {
+                    _collectionLoadedOnce = true;
+                    ScanAndRefreshCollection(true);
+                }
+                else if (_tabControl.SelectedTab == tabMappings && _cmbInstalledGames.Items.Count == 0)
                 {
                     PopulateInstalledSteamGamesDropdown();
                 }
@@ -455,6 +477,691 @@ namespace BackloggdAutoSync
             page.Controls.Add(_lvSessions);
             page.Controls.Add(spacer);
             page.Controls.Add(topBar);
+        }
+
+        private void BuildCollectionTab(TabPage page)
+        {
+            var topBar = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 92,
+                BackColor = BgCard,
+                Padding = new Padding(12, 8, 12, 8)
+            };
+
+            _lblCollectionSummary = new Label
+            {
+                Text = "Collection: Click 'Scan Libraries' or open this tab to load your owned Steam & Nintendo Switch games",
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                ForeColor = TextLight,
+                AutoSize = true,
+                Location = new Point(14, 12)
+            };
+
+            _btnScanCollection = CreateStyledButton("🔄 Scan Libraries", AccentBlue, 132, 32);
+            _btnScanCollection.Location = new Point(page.Width - 690, 8);
+            _btnScanCollection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnScanCollection.Click += (s, e) => ScanAndRefreshCollection(true);
+
+            _btnAutoMatchCollection = CreateStyledButton("✨ Auto-Match View", AccentBlue, 145, 32);
+            _btnAutoMatchCollection.Location = new Point(page.Width - 552, 8);
+            _btnAutoMatchCollection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnAutoMatchCollection.Click += BtnAutoMatchCollection_Click;
+
+            _btnEditCollectionEntry = CreateStyledButton("Edit / Map Game...", BgInput, 138, 32);
+            _btnEditCollectionEntry.Location = new Point(page.Width - 401, 8);
+            _btnEditCollectionEntry.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnEditCollectionEntry.Click += BtnEditCollectionEntry_Click;
+
+            _btnSyncSelectedCollection = CreateStyledButton("Sync Selected", AccentPink, 120, 32);
+            _btnSyncSelectedCollection.Location = new Point(page.Width - 257, 8);
+            _btnSyncSelectedCollection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnSyncSelectedCollection.Click += BtnSyncSelectedCollection_Click;
+
+            _btnSyncAllCollection = CreateStyledButton("Sync All Mapped", AccentPink, 125, 32);
+            _btnSyncAllCollection.Location = new Point(page.Width - 131, 8);
+            _btnSyncAllCollection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnSyncAllCollection.Click += BtnSyncAllCollection_Click;
+
+            var lblFilter = new Label
+            {
+                Text = "Show:",
+                ForeColor = TextMuted,
+                AutoSize = true,
+                Location = new Point(14, 54)
+            };
+
+            _cmbCollectionFilter = new ComboBox
+            {
+                Location = new Point(60, 50),
+                Width = 220,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = BgInput,
+                ForeColor = TextLight
+            };
+            _cmbCollectionFilter.Items.AddRange(new object[]
+            {
+                "All Owned Games (Steam + Switch)",
+                "Steam Games (All Owned)",
+                "Steam Games (Installed Only)",
+                "Nintendo Switch Games Only",
+                "Mapped & Ready to Sync",
+                "Synced on Backloggd Library",
+                "Unmapped Games Only"
+            });
+            _cmbCollectionFilter.SelectedIndex = 0;
+            _cmbCollectionFilter.SelectedIndexChanged += (s, e) => RefreshCollectionList();
+
+            var lblSearch = new Label
+            {
+                Text = "Filter:",
+                ForeColor = TextMuted,
+                AutoSize = true,
+                Location = new Point(292, 54)
+            };
+
+            _txtCollectionSearch = new TextBox
+            {
+                Location = new Point(338, 51),
+                Width = 200,
+                BackColor = BgInput,
+                ForeColor = TextLight,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            _txtCollectionSearch.TextChanged += (s, e) => RefreshCollectionList();
+
+            _chkCollectionShowHidden = new CheckBox
+            {
+                Text = "Include Steam Hidden",
+                Checked = false,
+                AutoSize = true,
+                ForeColor = TextMuted,
+                Location = new Point(552, 53)
+            };
+            _chkCollectionShowHidden.CheckedChanged += (s, e) => RefreshCollectionList();
+
+            _btnTogglePhysicalDigital = CreateStyledButton("💿/☁ Toggle Physical / Digital", BgInput, 195, 28);
+            _btnTogglePhysicalDigital.Location = new Point(page.Width - 201, 49);
+            _btnTogglePhysicalDigital.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnTogglePhysicalDigital.Click += BtnTogglePhysicalDigital_Click;
+
+            topBar.Controls.AddRange(new Control[]
+            {
+                _lblCollectionSummary, _btnScanCollection, _btnAutoMatchCollection,
+                _btnEditCollectionEntry, _btnSyncSelectedCollection, _btnSyncAllCollection,
+                lblFilter, _cmbCollectionFilter, lblSearch, _txtCollectionSearch,
+                _chkCollectionShowHidden, _btnTogglePhysicalDigital
+            });
+
+            _lvCollection = new ListView
+            {
+                Dock = DockStyle.Fill,
+                View = View.Details,
+                FullRowSelect = true,
+                MultiSelect = true,
+                GridLines = false,
+                BackColor = BgCard,
+                ForeColor = TextLight,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            _lvCollection.Columns.Add("Game Title (Local)", 225);
+            _lvCollection.Columns.Add("Source / State", 135);
+            _lvCollection.Columns.Add("Backloggd Association", 220);
+            _lvCollection.Columns.Add("Platform & Edition", 145);
+            _lvCollection.Columns.Add("Ownership & Store", 135);
+            _lvCollection.Columns.Add("Backloggd Library Status", 155);
+            _lvCollection.DoubleClick += BtnEditCollectionEntry_Click;
+
+            var spacer = new Panel { Dock = DockStyle.Top, Height = 10, BackColor = BgDark };
+
+            page.Controls.Add(_lvCollection);
+            page.Controls.Add(spacer);
+            page.Controls.Add(topBar);
+        }
+
+        private void ScanAndRefreshCollection(bool fetchRemote)
+        {
+            _btnScanCollection.Enabled = false;
+            _btnScanCollection.Text = "Scanning...";
+            _lblCollectionSummary.Text = "Scanning owned Steam & Nintendo Switch games and Backloggd Library...";
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    _tracker.SyncService.RefreshCollection(fetchRemote, status =>
+                    {
+                        if (IsHandleCreated && !IsDisposed)
+                        {
+                            BeginInvoke(new Action(() =>
+                            {
+                                _lblCollectionSummary.Text = status;
+                            }));
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    DataStore.Log("ScanAndRefreshCollection failed: " + ex.Message);
+                }
+
+                if (IsHandleCreated && !IsDisposed)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        _btnScanCollection.Enabled = true;
+                        _btnScanCollection.Text = "🔍 Scan Owned Games";
+                        RefreshCollectionList();
+                        RefreshMappingsList();
+                    }));
+                }
+            });
+        }
+
+        private void RefreshCollectionList()
+        {
+            if (_lvCollection == null) return;
+
+            var collection = DataStore.LoadCollection();
+            var mappings = DataStore.LoadMappings();
+            bool collectionDirty = false;
+
+            // Keep collection mappings in sync with mappings.json
+            foreach (var c in collection)
+            {
+                if (c.AppId != 0)
+                {
+                    var m = mappings.Find(x => x.AppId == c.AppId);
+                    if (m != null && !string.IsNullOrEmpty(m.BackloggdGameId) && c.BackloggdGameId != m.BackloggdGameId)
+                    {
+                        c.BackloggdGameId = m.BackloggdGameId;
+                        c.BackloggdTitle = m.BackloggdTitle;
+                        collectionDirty = true;
+                    }
+                }
+            }
+            if (collectionDirty)
+            {
+                DataStore.SaveCollection(collection);
+            }
+
+            string filterMode = _cmbCollectionFilter.SelectedItem != null ? _cmbCollectionFilter.SelectedItem.ToString() : "All Owned Games";
+            string search = (_txtCollectionSearch.Text ?? "").Trim().ToLowerInvariant();
+            bool showHidden = _chkCollectionShowHidden.Checked;
+
+            int totalOwned = 0;
+            int totalSteam = 0;
+            int totalSwitch = 0;
+            int totalMapped = 0;
+            int totalSynced = 0;
+
+            _lvCollection.BeginUpdate();
+            _lvCollection.Items.Clear();
+
+            foreach (var c in collection)
+            {
+                if (c.IsHiddenInSteam && !showHidden) continue;
+
+                bool isSwitchEntry = (c.Source ?? "").IndexOf("Switch", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                totalOwned++;
+                if (isSwitchEntry) totalSwitch++;
+                else totalSteam++;
+
+                if (!string.IsNullOrEmpty(c.BackloggdGameId)) totalMapped++;
+                if (c.Synced) totalSynced++;
+
+                // Apply filter dropdown
+                if (filterMode == "Steam Only (All Owned)" && !string.Equals(c.Source, "Steam", StringComparison.OrdinalIgnoreCase)) continue;
+                if (filterMode == "Steam Installed Only" && (!string.Equals(c.Source, "Steam", StringComparison.OrdinalIgnoreCase) || !c.IsInstalled)) continue;
+                if (filterMode == "Nintendo Switch Only" && !isSwitchEntry) continue;
+                if (filterMode == "Unsynced Only" && (c.Synced || c.Excluded)) continue;
+                if (filterMode == "Unmapped Only" && !string.IsNullOrEmpty(c.BackloggdGameId)) continue;
+                if (filterMode == "Synced on Backloggd" && !c.Synced) continue;
+
+                // Apply search text
+                if (!string.IsNullOrEmpty(search))
+                {
+                    string t1 = (c.LocalTitle ?? "").ToLowerInvariant();
+                    string t2 = (c.BackloggdTitle ?? "").ToLowerInvariant();
+                    string idStr = c.AppId.ToString();
+                    if (!t1.Contains(search) && !t2.Contains(search) && !idStr.Contains(search)) continue;
+                }
+
+                var item = new ListViewItem(c.LocalTitle ?? ("App " + c.AppId));
+                item.Tag = c;
+
+                string sourceState;
+                if (isSwitchEntry)
+                {
+                    sourceState = "Nintendo Switch";
+                }
+                else
+                {
+                    sourceState = c.IsInstalled ? "Steam (Installed)" : "Steam (Owned)";
+                    if (c.IsHiddenInSteam) sourceState += " [Hidden]";
+                }
+                item.SubItems.Add(sourceState);
+
+                if (!string.IsNullOrEmpty(c.BackloggdGameId))
+                {
+                    item.SubItems.Add(string.Format("{0} (ID {1})", c.BackloggdTitle ?? c.LocalTitle, c.BackloggdGameId));
+                }
+                else
+                {
+                    item.SubItems.Add("Unmapped — Double-click to map");
+                }
+
+                string platEdition = c.GetPlatformDisplayName();
+                if (!string.IsNullOrEmpty(c.EditionTitle))
+                {
+                    platEdition += " • " + c.EditionTitle;
+                }
+                item.SubItems.Add(platEdition);
+
+                string ownStore = c.GetOwnershipDisplayName();
+                string storeName = c.GetStorefrontDisplayName();
+                if (!string.IsNullOrEmpty(storeName) && storeName != "—" && c.OwnershipId == 1)
+                {
+                    ownStore += " (" + storeName + ")";
+                }
+                item.SubItems.Add(ownStore);
+
+                if (c.Excluded)
+                {
+                    item.SubItems.Add("Excluded");
+                    item.ForeColor = TextMuted;
+                }
+                else if (c.Synced)
+                {
+                    item.SubItems.Add(string.Format("✓ In Library (#{0})", c.BackloggdLibraryEntryId ?? "synced"));
+                    item.ForeColor = Color.FromArgb(170, 240, 195);
+                }
+                else if (!string.IsNullOrEmpty(c.SyncError))
+                {
+                    item.SubItems.Add("✗ " + c.SyncError);
+                    item.ForeColor = Color.FromArgb(255, 195, 140);
+                }
+                else if (!string.IsNullOrEmpty(c.BackloggdGameId))
+                {
+                    item.SubItems.Add("Ready to Sync");
+                    item.ForeColor = Color.FromArgb(180, 215, 255);
+                }
+                else
+                {
+                    item.SubItems.Add("Needs Mapping");
+                    item.ForeColor = TextLight;
+                }
+
+                _lvCollection.Items.Add(item);
+            }
+
+            _lvCollection.EndUpdate();
+
+            _lblCollectionSummary.Text = string.Format(
+                "Collection: {0} owned ({1} Steam, {2} Switch)  •  {3} mapped  •  {4} synced to Backloggd Library  (Showing {5})",
+                totalOwned, totalSteam, totalSwitch, totalMapped, totalSynced, _lvCollection.Items.Count);
+        }
+
+        private void BtnEditCollectionEntry_Click(object sender, EventArgs e)
+        {
+            if (_lvCollection.SelectedItems.Count == 0)
+            {
+                MessageBox.Show("Select a game in your collection first (or double-click any row) to map its Backloggd game or configure Physical/Digital & Edition options.",
+                    "Select Game", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var selected = _lvCollection.SelectedItems[0].Tag as CollectionEntry;
+            if (selected == null) return;
+
+            CollectionEntryDialog.Show(
+                this,
+                this.Font,
+                _settings,
+                selected,
+                (updatedEntry, syncImmediately) =>
+                {
+                    RefreshCollectionList();
+                    RefreshMappingsList();
+                    RefreshSessionsList();
+
+                    if (syncImmediately && !string.IsNullOrEmpty(updatedEntry.BackloggdGameId))
+                    {
+                        SyncCollectionEntriesBatch(new List<CollectionEntry> { updatedEntry });
+                    }
+                });
+        }
+
+        private void BtnTogglePhysicalDigital_Click(object sender, EventArgs e)
+        {
+            if (_lvCollection.SelectedItems.Count == 0)
+            {
+                MessageBox.Show("Select one or more games in the collection list to toggle between Physical and Digital.",
+                    "Select Game(s)", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var collection = DataStore.LoadCollection();
+            int changed = 0;
+
+            foreach (ListViewItem lvi in _lvCollection.SelectedItems)
+            {
+                var entry = lvi.Tag as CollectionEntry;
+                if (entry == null) continue;
+
+                var stored = collection.Find(x => x.Id == entry.Id);
+                if (stored == null) continue;
+
+                if (stored.OwnershipId == 0)
+                {
+                    // Switch from Physical -> Digital
+                    stored.OwnershipId = 1;
+                    bool isSwitchEntry = (stored.Source ?? "").IndexOf("Switch", StringComparison.OrdinalIgnoreCase) >= 0;
+                    stored.StorefrontId = isSwitchEntry ? 8 : 1;
+                }
+                else
+                {
+                    // Switch from Digital -> Physical
+                    stored.OwnershipId = 0;
+                    stored.StorefrontId = null;
+                }
+                stored.Synced = false;
+                stored.LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                changed++;
+            }
+
+            if (changed > 0)
+            {
+                DataStore.SaveCollection(collection);
+                RefreshCollectionList();
+            }
+        }
+
+        private void BtnAutoMatchCollection_Click(object sender, EventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(_settings.SessionCookie))
+            {
+                MessageBox.Show("Please connect your _backloggd_session cookie in the Settings tab first!",
+                    "Cookie Needed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _tabControl.SelectedIndex = 4;
+                return;
+            }
+
+            var targetEntries = new List<CollectionEntry>();
+            if (_lvCollection.SelectedItems.Count > 0)
+            {
+                foreach (ListViewItem item in _lvCollection.SelectedItems)
+                {
+                    var ce = item.Tag as CollectionEntry;
+                    if (ce != null && string.IsNullOrEmpty(ce.BackloggdGameId) && !ce.Excluded)
+                    {
+                        targetEntries.Add(ce);
+                    }
+                }
+            }
+
+            if (targetEntries.Count == 0)
+            {
+                // Match all currently visible unmapped rows
+                foreach (ListViewItem item in _lvCollection.Items)
+                {
+                    var ce = item.Tag as CollectionEntry;
+                    if (ce != null && string.IsNullOrEmpty(ce.BackloggdGameId) && !ce.Excluded)
+                    {
+                        targetEntries.Add(ce);
+                    }
+                }
+            }
+
+            if (targetEntries.Count == 0)
+            {
+                MessageBox.Show("All currently visible games in the list are already mapped to Backloggd!",
+                    "Already Mapped", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            _btnAutoMatchCollection.Enabled = false;
+            _btnAutoMatchCollection.Text = "Auto-Matching...";
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                int matched = 0;
+                int total = targetEntries.Count;
+                var collection = DataStore.LoadCollection();
+                var mappings = DataStore.LoadMappings();
+
+                for (int i = 0; i < targetEntries.Count; i++)
+                {
+                    var t = targetEntries[i];
+                    int idx = i + 1;
+                    if (IsHandleCreated && !IsDisposed)
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            _lblCollectionSummary.Text = string.Format("Auto-matching ({0}/{1}): {2}...", idx, total, t.LocalTitle);
+                        }));
+                    }
+
+                    try
+                    {
+                        string clean = BackloggdClient.CleanGameTitle(t.LocalTitle);
+                        var results = BackloggdClient.SearchGame(clean, _settings);
+                        if (results.Count == 0 && clean != t.LocalTitle)
+                        {
+                            results = BackloggdClient.SearchGame(t.LocalTitle, _settings);
+                        }
+                        var best = BackloggdClient.SelectBestMatch(clean, results) ?? (results.Count > 0 ? results[0] : null);
+                        if (best != null)
+                        {
+                            var stored = collection.Find(x => x.Id == t.Id);
+                            if (stored != null)
+                            {
+                                stored.BackloggdGameId = best.GameId;
+                                stored.BackloggdTitle = best.Title;
+                                stored.LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                            }
+
+                            if (t.AppId != 0)
+                            {
+                                mappings.RemoveAll(m => m.AppId == t.AppId);
+                                mappings.Add(new GameMapping
+                                {
+                                    AppId = t.AppId,
+                                    BackloggdGameId = best.GameId,
+                                    SteamTitle = t.LocalTitle,
+                                    BackloggdTitle = best.Title,
+                                    ReleaseYear = best.ReleaseYear,
+                                    ManualOverride = false,
+                                    LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                                });
+                            }
+                            matched++;
+                            if (matched % 10 == 0)
+                            {
+                                DataStore.SaveCollection(collection);
+                                DataStore.SaveMappings(mappings);
+                            }
+                        }
+                        Thread.Sleep(220);
+                    }
+                    catch { }
+                }
+
+                DataStore.SaveCollection(collection);
+                DataStore.SaveMappings(mappings);
+
+                if (IsHandleCreated && !IsDisposed)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        _btnAutoMatchCollection.Enabled = true;
+                        _btnAutoMatchCollection.Text = "✨ Auto-Match Unmapped";
+                        RefreshCollectionList();
+                        RefreshMappingsList();
+                        MessageBox.Show(
+                            string.Format("Auto-match complete!\r\n• Matched {0} of {1} game(s) to Backloggd.", matched, total),
+                            "Collection Auto-Match", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }));
+                }
+            });
+        }
+
+        private void BtnSyncSelectedCollection_Click(object sender, EventArgs e)
+        {
+            if (_lvCollection.SelectedItems.Count == 0)
+            {
+                MessageBox.Show("Select one or more games in the collection list to sync to your Backloggd Library.",
+                    "Select Game(s)", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var toSync = new List<CollectionEntry>();
+            foreach (ListViewItem lvi in _lvCollection.SelectedItems)
+            {
+                var ce = lvi.Tag as CollectionEntry;
+                if (ce != null && !ce.Excluded)
+                {
+                    toSync.Add(ce);
+                }
+            }
+
+            if (toSync.Count == 1 && string.IsNullOrEmpty(toSync[0].BackloggdGameId))
+            {
+                BtnEditCollectionEntry_Click(sender, e);
+                return;
+            }
+
+            SyncCollectionEntriesBatch(toSync);
+        }
+
+        private void BtnSyncAllCollection_Click(object sender, EventArgs e)
+        {
+            var toSync = new List<CollectionEntry>();
+            foreach (ListViewItem lvi in _lvCollection.Items)
+            {
+                var ce = lvi.Tag as CollectionEntry;
+                if (ce != null && !ce.Excluded && !string.IsNullOrEmpty(ce.BackloggdGameId) && !ce.Synced)
+                {
+                    toSync.Add(ce);
+                }
+            }
+
+            if (toSync.Count == 0)
+            {
+                MessageBox.Show("All mapped games currently shown in the list are already synced to your Backloggd Library!\r\n\r\n" +
+                    "Tip: Use '✨ Auto-Match Unmapped' or double-click any unmapped game to associate it with Backloggd first.",
+                    "Collection Up to Date", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var confirm = MessageBox.Show(
+                string.Format("Sync {0} mapped game(s) to your Backloggd Library now?\r\n\r\n" +
+                    "Note: This adds them to your Backloggd Collection / Library Entries with their configured Platform, Ownership (Digital/Physical), Storefront, and Edition — without marking unplayed games as 'Played'.",
+                    toSync.Count),
+                "Confirm Collection Sync",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (confirm != DialogResult.Yes) return;
+
+            SyncCollectionEntriesBatch(toSync);
+        }
+
+        private void SyncCollectionEntriesBatch(List<CollectionEntry> entriesToSync)
+        {
+            if (string.IsNullOrWhiteSpace(_settings.SessionCookie))
+            {
+                MessageBox.Show("Please connect your _backloggd_session cookie in the Settings tab first!",
+                    "Cookie Needed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _tabControl.SelectedIndex = 4;
+                return;
+            }
+
+            _btnSyncSelectedCollection.Enabled = false;
+            _btnSyncAllCollection.Enabled = false;
+            _btnSyncAllCollection.Text = "Syncing Library...";
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                int syncedCount = 0;
+                int failedCount = 0;
+                int total = entriesToSync.Count;
+                var collection = DataStore.LoadCollection();
+
+                for (int i = 0; i < entriesToSync.Count; i++)
+                {
+                    var item = entriesToSync[i];
+                    if (string.IsNullOrEmpty(item.BackloggdGameId))
+                    {
+                        failedCount++;
+                        continue;
+                    }
+
+                    int idx = i + 1;
+                    if (IsHandleCreated && !IsDisposed)
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            _lblCollectionSummary.Text = string.Format("Syncing to Backloggd Library ({0}/{1}): {2}...",
+                                idx, total, item.BackloggdTitle ?? item.LocalTitle);
+                        }));
+                    }
+
+                    var stored = collection.Find(x => x.Id == item.Id) ?? item;
+                    var syncRes = BackloggdClient.SaveLibraryEntry(stored, _settings);
+                    if (syncRes.Success)
+                    {
+                        stored.Synced = true;
+                        stored.SyncError = null;
+                        stored.LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                        syncedCount++;
+                    }
+                    else
+                    {
+                        stored.Synced = false;
+                        stored.SyncError = syncRes.Error;
+                        failedCount++;
+                    }
+
+                    if ((i + 1) % 5 == 0 || i == entriesToSync.Count - 1)
+                    {
+                        DataStore.SaveCollection(collection);
+                    }
+                    Thread.Sleep(250);
+                }
+
+                // Reconcile with Backloggd remote library to pick up any newly created entry IDs
+                if (syncedCount > 0)
+                {
+                    try
+                    {
+                        _tracker.SyncService.RefreshCollection(true, null);
+                    }
+                    catch { }
+                }
+
+                if (IsHandleCreated && !IsDisposed)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        _btnSyncSelectedCollection.Enabled = true;
+                        _btnSyncAllCollection.Enabled = true;
+                        _btnSyncAllCollection.Text = "🔄 Sync All Mapped";
+                        RefreshCollectionList();
+
+                        if (total > 1 || failedCount > 0)
+                        {
+                            MessageBox.Show(
+                                string.Format("Backloggd Library sync finished!\r\n• Synced: {0} game(s)\r\n• Failed/Skipped: {1} game(s)",
+                                    syncedCount, failedCount),
+                                "Library Sync Complete",
+                                MessageBoxButtons.OK,
+                                failedCount > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                        }
+                    }));
+                }
+            });
         }
 
         private void BuildMappingsTab(TabPage page)
@@ -979,10 +1686,10 @@ namespace BackloggdAutoSync
         private void PopulateInstalledSteamGamesDropdown()
         {
             _cmbInstalledGames.Items.Clear();
-            var installed = SteamTracker.GetInstalledSteamGames(_settings.IgnoredAppIds);
+            var ownedGames = SteamLibrary.GetAllOwnedSteamGames(_settings.IgnoredAppIds, false);
             var seenIds = new HashSet<int>();
 
-            foreach (var g in installed)
+            foreach (var g in ownedGames)
             {
                 _cmbInstalledGames.Items.Add(g);
                 seenIds.Add(g.AppId);
@@ -1099,7 +1806,7 @@ namespace BackloggdAutoSync
             {
                 MessageBox.Show("Please connect your _backloggd_session cookie in the Settings tab first!",
                     "Cookie Needed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _tabControl.SelectedIndex = 3;
+                _tabControl.SelectedIndex = 4;
                 return;
             }
 
@@ -1422,6 +2129,11 @@ namespace BackloggdAutoSync
                 _lvMappings.Items.Add(item);
             }
             _lvMappings.EndUpdate();
+
+            if (_collectionLoadedOnce && _lvCollection != null)
+            {
+                RefreshCollectionList();
+            }
         }
 
         private void UpdateAccountBadge()

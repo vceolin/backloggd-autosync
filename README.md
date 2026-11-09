@@ -1,7 +1,7 @@
 # Backloggd AutoSync
 
 <p align="center">
-  <strong>Automatic daily playtime tracker & diary synchronizer for Steam & Nintendo Switch to Backloggd.</strong>
+  <strong>Automatic daily playtime tracker, diary synchronizer & collection manager for Steam & Nintendo Switch to Backloggd.</strong>
 </p>
 
 <p align="center">
@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Dependencies-Zero-success" alt="Zero External Dependencies" />
   <img src="https://img.shields.io/badge/Steam-Real--Time-1b2838?logo=steam&logoColor=white" alt="Steam Tracking" />
   <img src="https://img.shields.io/badge/Nintendo_Switch-Cloud_Sync-E60012?logo=nintendoswitch&logoColor=white" alt="Nintendo Switch Sync" />
-  <img src="https://img.shields.io/badge/Backloggd-Diary_Journal-ea377a" alt="Backloggd Sync" />
+  <img src="https://img.shields.io/badge/Backloggd-Diary_%26_Library-ea377a" alt="Backloggd Sync" />
 </p>
 
 ---
@@ -23,14 +23,15 @@
   - [1. Backloggd Account Setup](#1-backloggd-account-setup)
   - [2. Steam Playtime Tracking](#2-steam-playtime-tracking)
   - [3. Nintendo Switch & Switch 2 Cloud Sync](#3-nintendo-switch--switch-2-cloud-sync)
+  - [4. Collection / Library Entries Sync](#4-collection--library-entries-sync)
 - [Application Dashboard & Tabs](#application-dashboard--tabs)
   - [Sessions & Daily Summary](#sessions--daily-summary)
+  - [Collection / Library](#collection--library)
   - [Game Mappings & Auto-Matching](#game-mappings--auto-matching)
   - [Nintendo Switch Sync](#nintendo-switch-sync)
   - [Account & Settings](#account--settings)
 - [Command-Line Arguments & Startup](#command-line-arguments--startup)
 - [Building from Source](#building-from-source)
-- [Project Architecture & Data Storage](#project-architecture--data-storage)
 - [Security & Privacy](#security--privacy)
 - [Troubleshooting & FAQ](#troubleshooting--faq)
 
@@ -38,12 +39,13 @@
 
 ## Overview
 
-[Backloggd](https://backloggd.com) features a **Journal / Diary** mode where users can track which games they played on each calendar day and how long they played. However, logging games, durations, and platforms manually after every gaming session can be cumbersome.
+[Backloggd](https://backloggd.com) features both a **Journal / Diary** mode (where users track which games they played on each calendar day and how long they played) and a **Library Entries / Collection** system (where users catalog the physical and digital games they own across platforms, storefronts, and editions). However, logging games, durations, platforms, and owned collection items manually can be cumbersome.
 
-**Backloggd AutoSync** is a lightweight, zero-dependency Windows desktop application that runs quietly in your System Tray. It automatically records your gaming sessions and syncs exact daily playtimes directly into your Backloggd diary:
+**Backloggd AutoSync** is a lightweight, zero-dependency Windows desktop application that runs quietly in your System Tray. It automatically records your gaming sessions, syncs exact daily playtimes into your Backloggd diary, and syncs your owned game collection into your Backloggd Library:
 
-- **Steam (PC)**: Detects active Steam titles in real-time on your PC, accumulates playtime across sessions, splits gameplay across midnight, and pushes synced diary entries when games close.
+- **Steam (PC)**: Detects active Steam titles in real-time on your PC, accumulates playtime across sessions, splits gameplay across midnight, and pushes synced diary entries when games close—plus discovers your **entire owned Steam library** (both installed and uninstalled games, excluding family-shared titles owned by other accounts) directly from your local Steam client cache.
 - **Nintendo Switch & Switch 2**: Connects directly to Nintendo's official cloud APIs to pull daily playtime and historical gameplay recorded on your console—**even when your PC was turned off** or while playing on the go.
+- **Collection / Library Sync**: Lets you browse and pre-associate any owned Steam or Switch game with Backloggd even before launching it, configure **Digital vs. Physical**, **Storefront**, **Platform** (`Windows PC`, `Nintendo Switch`, `Nintendo Switch 2`), and **Game Edition**, and sync directly to your Backloggd Library without marking unplayed games as "Played".
 
 All of this happens without overwriting your existing reviews, ratings, notes, or master statuses.
 
@@ -66,6 +68,12 @@ All of this happens without overwriting your existing reviews, ratings, notes, o
 - **Smart Incremental Reconciliation**: Automatically compares each game's `totalPlayedDays` and `totalPlayedMinutes` against local sessions so the first sync imports your entire lifetime day-by-day history and subsequent syncs only fetch games with new activity.
 - **Once-a-Day Scheduled Background Sync**: Checks Nintendo's servers once per calendar day in the background and syncs new daily sessions automatically.
 - **Non-Game App Filtering**: Automatically ignores media apps (such as YouTube, Hulu, Crunchyroll, Twitch) and Nintendo Classics emulator hubs.
+
+### 📚 Collection / Library Entries Auto-Sync
+- **Full Owned Steam Library Discovery (Installed & Uninstalled)**: Reads your local Steam client cache (`userdata/<id>/config/licensecache`, `appcache/packageinfo.vdf`, `appcache/appinfo.vdf`, and `cloud-storage-namespace-1.json`) to discover every game you personally own on Steam—even uninstalled titles—while automatically filtering out non-game tools/DLCs and Steam Family Group games owned by other members.
+- **Nintendo Switch & Switch 2 Collection**: Automatically lists all your Nintendo Switch & Switch 2 games and lets you configure each title as **Physical (Cartridge)** or **Digital (Nintendo eShop)**, pick its **Platform** (`Nintendo Switch` vs. `Nintendo Switch 2`), and choose a specific **Game Edition** (fetched live from Backloggd's `/library/options/{game_id}`).
+- **Pre-Launch Backloggd Association**: Search and associate any game in your collection with its canonical Backloggd entry **even before you ever launch it**. Your association is saved in `data/mappings.json` so future playtime sessions automatically use that exact match.
+- **Pure Collection Sync (Never Marks Unplayed Games as Played)**: Syncs directly to Backloggd's `/library/entry` API (`POST` / `PATCH`) and reconciles with your existing Backloggd Library (`/u/<username>/library`) without setting `Played` or `Backlog` flags on unplayed titles.
 
 ### 📖 Non-Destructive Backloggd Diary Sync
 - **Preserves Your Data**: Backloggd AutoSync safely logs playtime and dates under `sync_sessions` without altering your pre-existing star ratings, reviews, played statuses, or custom journal notes.
@@ -129,12 +137,32 @@ Backloggd AutoSync connects directly to your Nintendo Account's official **Ninte
 
 ---
 
+### 4. Collection / Library Entries Sync
+
+You can also sync your owned Steam and Nintendo Switch collection into your Backloggd **Library** (`/u/<username>/library`) without marking unplayed games as "Played":
+
+1. Open the **Collection / Library** tab and click **🔍 Scan Owned Games** (runs automatically the first time you open the tab).
+2. Backloggd AutoSync discovers all your owned Steam games (both installed and uninstalled) and Nintendo Switch titles, and reconciles them against any entries already in your Backloggd Library.
+3. To associate unmapped games with Backloggd:
+   - Double-click any game (or select it and click **✏️ Map / Edit Options**) to search Backloggd, pick the exact game, and configure **Ownership** (`Digital`, `Physical`, or `Lost / Sold`), **Platform** (`Windows PC`, `Nintendo Switch`, `Nintendo Switch 2`), **Storefront** (`Steam`, `Nintendo eShop`, etc.), and **Game Edition**.
+   - Or click **✨ Auto-Match Unmapped** to automatically match unmapped games in bulk.
+   - For Nintendo Switch games, you can also select one or more titles and click **💿/☁ Toggle Physical / Digital** to switch between Physical cartridge and Digital eShop ownership in one click.
+4. Click **✓ Sync Selected** or **🔄 Sync All Mapped** to push your collection entries to your Backloggd Library.
+
+---
+
 ### Sessions & Daily Summary
 - **Live Status Header**: Displays the currently active game and real-time session duration.
 - **Session History Table**: Chronological list of recorded sessions showing platform, date, title, duration, and sync status.
 - **Sync Pending**: Immediately flushes any un-synced or retried sessions to Backloggd.
 - **Pick Game for Session**: Reassign an existing session to a different Backloggd title.
 - **Manual Log Entry**: Add arbitrary game sessions (retro games, other platforms) by entering game title, date, duration, and platform.
+
+### Collection / Library
+- **Full Owned Catalog**: View all your owned Steam games (installed + uninstalled, with an optional toggle to show games hidden in your Steam client) and Nintendo Switch / Switch 2 titles.
+- **Pre-Launch Game Association**: Map any owned game to Backloggd before ever launching it; mappings are shared with the Diary tracker so future sessions sync seamlessly.
+- **Ownership, Storefront, Platform & Edition Controls**: Steam games default to `Digital` + `Windows PC` + `Steam`; Nintendo Switch games let you choose `Physical` vs. `Digital (Nintendo eShop)`, `Nintendo Switch` vs. `Nintendo Switch 2`, and specific **Game Editions** loaded dynamically from Backloggd.
+- **Filter & Search**: Filter by `All Owned Games`, `Steam Only (All Owned)`, `Steam Installed Only`, `Nintendo Switch Only`, `Unsynced Only`, `Unmapped Only`, or `Synced on Backloggd`, plus instant title/AppID search.
 
 ### Game Mappings & Auto-Matching
 - **Installed Games Dropdown**: Lists all Steam games found across all Steam library directories on your computer.

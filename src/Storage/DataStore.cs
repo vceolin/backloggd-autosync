@@ -8,10 +8,26 @@ namespace BackloggdAutoSync
 {
     public static class DataStore
     {
-        public static readonly string DataDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data");
+        private static string ResolveBaseDir()
+        {
+            var entry = System.Reflection.Assembly.GetEntryAssembly();
+            if (entry != null && !string.IsNullOrEmpty(entry.Location))
+            {
+                return Path.GetDirectoryName(entry.Location);
+            }
+            var own = typeof(DataStore).Assembly;
+            if (own != null && !string.IsNullOrEmpty(own.Location))
+            {
+                return Path.GetDirectoryName(own.Location);
+            }
+            return AppDomain.CurrentDomain.BaseDirectory;
+        }
+
+        public static readonly string DataDir = Path.Combine(ResolveBaseDir(), "data");
         public static readonly string SettingsPath = Path.Combine(DataDir, "settings.json");
         public static readonly string MappingsPath = Path.Combine(DataDir, "mappings.json");
         public static readonly string SessionsPath = Path.Combine(DataDir, "sessions.json");
+        public static readonly string CollectionPath = Path.Combine(DataDir, "collection.json");
         public static readonly string CheckpointPath = Path.Combine(DataDir, "active_session.json");
         public static readonly string LogFilePath = Path.Combine(DataDir, "activity.log");
 
@@ -159,6 +175,42 @@ namespace BackloggdAutoSync
             catch (Exception ex)
             {
                 Log("Failed to save sessions: " + ex.Message);
+            }
+        }
+
+        public static List<CollectionEntry> LoadCollection()
+        {
+            try
+            {
+                EnsureDataDir();
+                if (File.Exists(CollectionPath))
+                {
+                    string json = File.ReadAllText(CollectionPath, Encoding.UTF8);
+                    var list = CreateSerializer().Deserialize<List<CollectionEntry>>(json);
+                    if (list != null) return list;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Failed to load collection: " + ex.Message);
+            }
+            return new List<CollectionEntry>();
+        }
+
+        public static void SaveCollection(List<CollectionEntry> collection)
+        {
+            try
+            {
+                lock (_lock)
+                {
+                    EnsureDataDir();
+                    string json = CreateSerializer().Serialize(collection);
+                    File.WriteAllText(CollectionPath, json, Encoding.UTF8);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Failed to save collection: " + ex.Message);
             }
         }
 

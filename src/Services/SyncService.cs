@@ -589,5 +589,283 @@ namespace BackloggdAutoSync
                 }
             }
         }
+
+        public List<CollectionEntry> RefreshCollection(bool fetchRemoteSources = true, Action<string> onProgress = null)
+        {
+            var settings = DataStore.LoadSettings();
+            var collection = DataStore.LoadCollection();
+            var mappings = DataStore.LoadMappings();
+            var sessions = DataStore.LoadSessions();
+
+            var byId = new Dictionary<string, CollectionEntry>(StringComparer.OrdinalIgnoreCase);
+            var byAppId = new Dictionary<int, CollectionEntry>();
+            foreach (var c in collection)
+            {
+                if (!string.IsNullOrEmpty(c.Id)) byId[c.Id] = c;
+                if (c.AppId != 0 && !byAppId.ContainsKey(c.AppId)) byAppId[c.AppId] = c;
+            }
+
+            // 1. Discover all owned Steam games locally (installed + uninstalled)
+            if (onProgress != null) onProgress("Scanning local Steam library (installed & uninstalled owned games)...");
+            var ownedSteam = SteamLibrary.GetAllOwnedSteamGames(settings.IgnoredAppIds, true);
+            foreach (var sg in ownedSteam)
+            {
+                string cid = "steam_" + sg.AppId;
+                CollectionEntry entry;
+                if (!byId.TryGetValue(cid, out entry) && !byAppId.TryGetValue(sg.AppId, out entry))
+                {
+                    entry = new CollectionEntry
+                    {
+                        Id = cid,
+                        Source = "Steam",
+                        AppId = sg.AppId,
+                        LocalTitle = sg.Title,
+                        IsInstalled = sg.IsInstalled,
+                        IsHiddenInSteam = sg.IsHidden,
+                        PlatformId = 6,
+                        OwnershipId = 1, // Digital
+                        StorefrontId = 1 // Steam
+                    };
+                    collection.Add(entry);
+                    byId[cid] = entry;
+                    byAppId[sg.AppId] = entry;
+                }
+                else
+                {
+                    entry.Id = cid;
+                    entry.Source = "Steam";
+                    entry.AppId = sg.AppId;
+                    if (!string.IsNullOrEmpty(sg.Title)) entry.LocalTitle = sg.Title;
+                    entry.IsInstalled = sg.IsInstalled;
+                    entry.IsHiddenInSteam = sg.IsHidden;
+                    if (entry.PlatformId <= 0) entry.PlatformId = 6;
+                }
+
+                var map = mappings.Find(m => m.AppId == sg.AppId);
+                if (map != null && !string.IsNullOrEmpty(map.BackloggdGameId))
+                {
+                    if (entry.BackloggdGameId != map.BackloggdGameId)
+                    {
+                        entry.BackloggdGameId = map.BackloggdGameId;
+                        entry.BackloggdTitle = map.BackloggdTitle;
+                        entry.ReleaseYear = map.ReleaseYear ?? "";
+                    }
+                    else if (string.IsNullOrEmpty(entry.BackloggdTitle) && !string.IsNullOrEmpty(map.BackloggdTitle))
+                    {
+                        entry.BackloggdTitle = map.BackloggdTitle;
+                    }
+                }
+            }
+
+            // 2. Discover Nintendo Switch / Switch 2 games from sessions, mappings, and optionally Nintendo Store API
+            var switchCandidates = new Dictionary<int, NintendoDailyGameRecord>();
+            foreach (var s in sessions)
+            {
+                if (!string.Equals(s.Platform, "Switch", StringComparison.OrdinalIgnoreCase)) continue;
+                if (NintendoSwitchClient.IsNonGameSwitchApp(s.SwitchApplicationId, s.GameTitle)) continue;
+
+                int swId = s.AppId != 0 ? s.AppId : NintendoSwitchClient.GetStableSwitchAppId(s.SwitchApplicationId, s.GameTitle);
+                if (!switchCandidates.ContainsKey(swId))
+                {
+                    var map = mappings.Find(m => m.AppId == swId);
+                    string rawName = (map != null && !string.IsNullOrEmpty(map.SteamTitle)) ? map.SteamTitle : s.GameTitle;
+                    switchCandidates[swId] = new NintendoDailyGameRecord
+                    {
+                        ApplicationId = s.SwitchApplicationId ?? (map != null ? map.SwitchApplicationId : ""),
+                        Title = rawName ?? ""
+                    };
+                }
+            }
+
+            foreach (var m in mappings)
+            {
+                if (m.AppId >= 0) continue;
+                if (NintendoSwitchClient.IsNonGameSwitchApp(m.SwitchApplicationId, m.SteamTitle)) continue;
+                if (!switchCandidates.ContainsKey(m.AppId))
+                {
+                    switchCandidates[m.AppId] = new NintendoDailyGameRecord
+                    {
+                        ApplicationId = m.SwitchApplicationId ?? "",
+                        Title = !string.IsNullOrEmpty(m.SteamTitle) ? m.SteamTitle : m.BackloggdTitle
+                    };
+                }
+            }
+
+            if (fetchRemoteSources && !string.IsNullOrWhiteSpace(settings.NintendoStoreSessionToken))
+            {
+                try
+                {
+                    if (onProgress != null) onProgress("Checking Nintendo Switch game history...");
+                    List<NintendoAllTimeGameRecord> storeGames;
+                    List<NintendoDailyGameRecord> storeDaily;
+                    string nick;
+                    string accessToken;
+                    NintendoSwitchClient.FetchStorePlayHistory(settings.NintendoStoreSessionToken, out storeGames, out storeDaily, out nick, out accessToken);
+                    if (storeGames != null)
+                    {
+                        foreach (var g in storeGames)
+                        {
+                            if (NintendoSwitchClient.IsNonGameSwitchApp(g.TitleId, g.TitleName)) continue;
+                            int swId = NintendoSwitchClient.GetStableSwitchAppId(g.TitleId, g.TitleName);
+                            switchCandidates[swId] = new NintendoDailyGameRecord
+                            {
+                                ApplicationId = g.TitleId ?? "",
+                                Title = g.TitleName ?? ""
+                            };
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            foreach (var kv in switchCandidates)
+            {
+                int swId = kv.Key;
+                var rec = kv.Value;
+                string cid = "nx_" + Math.Abs(swId);
+
+                CollectionEntry entry;
+                if (!byId.TryGetValue(cid, out entry) && !byAppId.TryGetValue(swId, out entry))
+                {
+                    var map = mappings.Find(m => m.AppId == swId);
+                    string checkTitle = ((rec.Title ?? "") + " " + (map != null ? map.BackloggdTitle : "")).ToLowerInvariant();
+                    int defaultPlat = (checkTitle.Contains("switch 2") || checkTitle.Contains("mario kart world") || checkTitle.Contains("donkey kong bananza")) ? 508 : 130;
+
+                    entry = new CollectionEntry
+                    {
+                        Id = cid,
+                        Source = "Nintendo Switch",
+                        AppId = swId,
+                        SwitchApplicationId = rec.ApplicationId ?? "",
+                        LocalTitle = rec.Title ?? "",
+                        IsInstalled = true,
+                        PlatformId = defaultPlat,
+                        OwnershipId = 1, // Digital by default; user can switch to Physical (0)
+                        StorefrontId = 8 // Nintendo eShop
+                    };
+                    collection.Add(entry);
+                    byId[cid] = entry;
+                    byAppId[swId] = entry;
+                }
+                else
+                {
+                    entry.Id = cid;
+                    entry.Source = "Nintendo Switch";
+                    entry.AppId = swId;
+                    if (!string.IsNullOrEmpty(rec.ApplicationId)) entry.SwitchApplicationId = rec.ApplicationId;
+                    if (!string.IsNullOrEmpty(rec.Title)) entry.LocalTitle = rec.Title;
+                    if (entry.PlatformId != 130 && entry.PlatformId != 508) entry.PlatformId = 130;
+                }
+
+                var swMap = mappings.Find(m => m.AppId == swId);
+                if (swMap != null && !string.IsNullOrEmpty(swMap.BackloggdGameId))
+                {
+                    entry.BackloggdGameId = swMap.BackloggdGameId;
+                    if (!string.IsNullOrEmpty(swMap.BackloggdTitle)) entry.BackloggdTitle = swMap.BackloggdTitle;
+                    if (!string.IsNullOrEmpty(swMap.ReleaseYear)) entry.ReleaseYear = swMap.ReleaseYear;
+                }
+            }
+
+            // Remove any non-game Switch entries that might have been saved previously
+            collection.RemoveAll(c =>
+                c.Source == "Nintendo Switch" &&
+                NintendoSwitchClient.IsNonGameSwitchApp(c.SwitchApplicationId, c.LocalTitle));
+
+            // 3. Reconcile with existing remote Backloggd Library Entries
+            if (fetchRemoteSources && !string.IsNullOrWhiteSpace(settings.SessionCookie) && !string.IsNullOrWhiteSpace(settings.UserId))
+            {
+                try
+                {
+                    if (onProgress != null) onProgress("Fetching existing Backloggd Library Entries...");
+                    var remoteEntries = BackloggdClient.FetchUserLibraryEntries(settings);
+                    bool mappingsUpdated = false;
+
+                    foreach (var rem in remoteEntries)
+                    {
+                        CollectionEntry matched = collection.Find(c =>
+                            !string.IsNullOrEmpty(c.BackloggdLibraryEntryId) &&
+                            c.BackloggdLibraryEntryId == rem.EntryId);
+
+                        if (matched == null)
+                        {
+                            bool isPcRem = (rem.PlatformId == 6);
+                            bool isSwitchRem = (rem.PlatformId == 130 || rem.PlatformId == 508);
+
+                            matched = collection.Find(c =>
+                                c.BackloggdGameId == rem.GameId &&
+                                ((isPcRem && c.Source == "Steam") || (isSwitchRem && c.Source == "Nintendo Switch") || c.PlatformId == rem.PlatformId));
+                        }
+
+                        if (matched == null && !string.IsNullOrEmpty(rem.GameTitle))
+                        {
+                            string remClean = GameTitleMatcher.CleanGameTitle(rem.GameTitle);
+                            bool isPcRem = (rem.PlatformId == 6);
+                            bool isSwitchRem = (rem.PlatformId == 130 || rem.PlatformId == 508);
+
+                            matched = collection.Find(c =>
+                                string.IsNullOrEmpty(c.BackloggdLibraryEntryId) &&
+                                ((isPcRem && c.Source == "Steam") || (isSwitchRem && c.Source == "Nintendo Switch")) &&
+                                string.Equals(GameTitleMatcher.CleanGameTitle(c.LocalTitle), remClean, StringComparison.OrdinalIgnoreCase));
+
+                            if (matched != null && string.IsNullOrEmpty(matched.BackloggdGameId))
+                            {
+                                matched.BackloggdGameId = rem.GameId;
+                                matched.BackloggdTitle = rem.GameTitle;
+
+                                if (matched.AppId != 0 && !mappings.Exists(m => m.AppId == matched.AppId))
+                                {
+                                    mappings.Add(new GameMapping
+                                    {
+                                        AppId = matched.AppId,
+                                        SwitchApplicationId = matched.SwitchApplicationId,
+                                        BackloggdGameId = rem.GameId,
+                                        SteamTitle = matched.LocalTitle,
+                                        BackloggdTitle = rem.GameTitle,
+                                        ManualOverride = false,
+                                        LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                                    });
+                                    mappingsUpdated = true;
+                                }
+                            }
+                        }
+
+                        if (matched != null)
+                        {
+                            matched.BackloggdLibraryEntryId = rem.EntryId;
+                            if (string.IsNullOrEmpty(matched.BackloggdGameId))
+                            {
+                                matched.BackloggdGameId = rem.GameId;
+                                if (!string.IsNullOrEmpty(rem.GameTitle)) matched.BackloggdTitle = rem.GameTitle;
+                            }
+                            matched.PlatformId = rem.PlatformId;
+                            matched.OwnershipId = rem.OwnershipId;
+                            matched.StorefrontId = rem.StorefrontId;
+                            if (!string.IsNullOrEmpty(rem.EditionId)) matched.EditionId = rem.EditionId;
+                            matched.Synced = true;
+                            matched.SyncError = "";
+                        }
+                    }
+
+                    if (mappingsUpdated)
+                    {
+                        DataStore.SaveMappings(mappings);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    DataStore.Log("Error fetching remote library entries: " + ex.Message);
+                }
+            }
+
+            collection.Sort((a, b) =>
+            {
+                int srcCmp = string.Compare(a.Source, b.Source, StringComparison.OrdinalIgnoreCase);
+                if (srcCmp != 0) return srcCmp;
+                return string.Compare(a.LocalTitle, b.LocalTitle, StringComparison.OrdinalIgnoreCase);
+            });
+
+            DataStore.SaveCollection(collection);
+            return collection;
+        }
     }
 }

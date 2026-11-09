@@ -96,4 +96,38 @@ namespace BackloggdAutoSync
         public string UserId { get; set; }
         public string Error { get; set; }
     }
+
+    public class LibraryOptionItem
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+
+        public override string ToString()
+        {
+            return string.IsNullOrEmpty(Id) ? Name : string.Format("{0} (ID: {1})", Name, Id);
+        }
+    }
+
+    public class BackloggdLibraryOptions
+    {
+        public List<LibraryOptionItem> Platforms { get; set; }
+        public List<LibraryOptionItem> Editions { get; set; }
+
+        public BackloggdLibraryOptions()
+        {
+            Platforms = new List<LibraryOptionItem>();
+            Editions = new List<LibraryOptionItem>();
+        }
+    }
+
+    public class RemoteLibraryEntry
+    {
+        public string EntryId { get; set; }
+        public string GameId { get; set; }
+        public string GameTitle { get; set; }
+        public int PlatformId { get; set; }
+        public int OwnershipId { get; set; }
+        public int? StorefrontId { get; set; }
+        public string EditionId { get; set; }
+    }
 }

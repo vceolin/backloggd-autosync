@@ -989,5 +989,367 @@ namespace BackloggdAutoSync
             result.FinalDayMinutes = ptMins;
             return result;
         }
+
+        public static BackloggdLibraryOptions GetLibraryOptions(string gameId, AppSettings settings)
+        {
+            var options = new BackloggdLibraryOptions();
+            if (string.IsNullOrWhiteSpace(gameId)) return options;
+
+            string cleanCookie = NormalizeCookie(settings.SessionCookie);
+            string url = BaseUrl + "/library/options/" + gameId.Trim();
+
+            var headers = new Dictionary<string, string>
+            {
+                { "Accept", "text/vnd.turbo-stream.html, text/html, */*" },
+                { "X-Requested-With", "XMLHttpRequest" }
+            };
+            if (!string.IsNullOrEmpty(settings.CsrfToken))
+            {
+                headers["X-CSRF-Token"] = settings.CsrfToken;
+            }
+
+            var res = SendRequest(url, "GET", cleanCookie, headers);
+            if (!res.Ok || string.IsNullOrEmpty(res.Body))
+            {
+                return options;
+            }
+
+            string html = res.Body;
+            var seenPlats = new HashSet<string>();
+
+            Match platBlockMatch = Regex.Match(html, @"<div\s+class=[""'][^""']*game-platform-options[^""']*[""'][^>]*>([\s\S]*?)</div>", RegexOptions.IgnoreCase);
+            if (platBlockMatch.Success)
+            {
+                foreach (Match opt in Regex.Matches(platBlockMatch.Groups[1].Value, @"<option\s+value=[""'](\d+)[""'][^>]*>([\s\S]*?)</option>", RegexOptions.IgnoreCase))
+                {
+                    string pid = opt.Groups[1].Value.Trim();
+                    string pname = WebUtility.HtmlDecode(opt.Groups[2].Value.Trim());
+                    if (!string.IsNullOrEmpty(pid) && !seenPlats.Contains(pid))
+                    {
+                        seenPlats.Add(pid);
+                        options.Platforms.Add(new LibraryOptionItem { Id = pid, Name = pname });
+                    }
+                }
+            }
+
+            // Also include any edition-specific platforms
+            foreach (Match edPlatBlock in Regex.Matches(html, @"<div\s+class=[""'][^""']*game-platform-options-edition[^""']*[""'][^>]*>([\s\S]*?)</div>", RegexOptions.IgnoreCase))
+            {
+                foreach (Match opt in Regex.Matches(edPlatBlock.Groups[1].Value, @"<option\s+value=[""'](\d+)[""'][^>]*>([\s\S]*?)</option>", RegexOptions.IgnoreCase))
+                {
+                    string pid = opt.Groups[1].Value.Trim();
+                    string pname = WebUtility.HtmlDecode(opt.Groups[2].Value.Trim());
+                    if (!string.IsNullOrEmpty(pid) && !seenPlats.Contains(pid))
+                    {
+                        seenPlats.Add(pid);
+                        options.Platforms.Add(new LibraryOptionItem { Id = pid, Name = pname });
+                    }
+                }
+            }
+
+            Match edBlockMatch = Regex.Match(html, @"<div\s+class=[""'][^""']*game-edition-options[^""']*[""'][^>]*>([\s\S]*?)</div>", RegexOptions.IgnoreCase);
+            if (edBlockMatch.Success)
+            {
+                foreach (Match opt in Regex.Matches(edBlockMatch.Groups[1].Value, @"<option\s+value=[""'](\d+)[""'][^>]*>([\s\S]*?)</option>", RegexOptions.IgnoreCase))
+                {
+                    string eid = opt.Groups[1].Value.Trim();
+                    string ename = WebUtility.HtmlDecode(opt.Groups[2].Value.Trim());
+                    if (!string.IsNullOrEmpty(eid))
+                    {
+                        options.Editions.Add(new LibraryOptionItem { Id = eid, Name = ename });
+                    }
+                }
+            }
+
+            return options;
+        }
+
+        public static List<RemoteLibraryEntry> FetchUserLibraryEntries(AppSettings settings)
+        {
+            var entries = new List<RemoteLibraryEntry>();
+            if (settings == null || string.IsNullOrWhiteSpace(settings.SessionCookie) || string.IsNullOrWhiteSpace(settings.UserId))
+            {
+                return entries;
+            }
+
+            string cleanCookie = NormalizeCookie(settings.SessionCookie);
+            var headers = new Dictionary<string, string>
+            {
+                { "Accept", "text/vnd.turbo-stream.html, text/html, */*" },
+                { "X-Requested-With", "XMLHttpRequest" }
+            };
+            if (!string.IsNullOrEmpty(settings.CsrfToken))
+            {
+                headers["X-CSRF-Token"] = settings.CsrfToken;
+            }
+
+            var seenEntryIds = new HashSet<string>();
+
+            for (int page = 1; page <= 50; page++)
+            {
+                string url = string.Format("{0}/user/{1}/library/none/none/list/title.turbo_stream?expanded=true&page={2}", BaseUrl, settings.UserId, page);
+                var res = SendRequest(url, "GET", cleanCookie, headers);
+                if (!res.Ok || string.IsNullOrEmpty(res.Body))
+                {
+                    break;
+                }
+
+                string html = res.Body;
+                MatchCollection btnMatches = Regex.Matches(html, @"<button[^>]*data-controller=[""']library-entry-edit[""'][^>]*>", RegexOptions.IgnoreCase);
+                if (btnMatches.Count == 0)
+                {
+                    break;
+                }
+
+                int addedOnPage = 0;
+                foreach (Match m in btnMatches)
+                {
+                    string tag = m.Value;
+                    string entryId = ExtractAttr(tag, "data-library-entry-edit-entry-id-value");
+                    string gameId = ExtractAttr(tag, "data-library-entry-edit-game-id-value");
+                    string platStr = ExtractAttr(tag, "data-library-entry-edit-platform-id-value");
+                    string ownStr = ExtractAttr(tag, "data-library-entry-edit-ownership-id-value");
+                    string storeStr = ExtractAttr(tag, "data-library-entry-edit-storefront-id-value");
+                    string edStr = ExtractAttr(tag, "data-library-entry-edit-edition-id-value");
+
+                    if (string.IsNullOrEmpty(entryId) || string.IsNullOrEmpty(gameId)) continue;
+                    if (seenEntryIds.Contains(entryId)) continue;
+                    seenEntryIds.Add(entryId);
+
+                    int platId = 6;
+                    int.TryParse(platStr, out platId);
+                    int ownId = 1;
+                    int.TryParse(ownStr, out ownId);
+                    int? storeId = null;
+                    int parsedStore;
+                    if (!string.IsNullOrEmpty(storeStr) && int.TryParse(storeStr, out parsedStore))
+                    {
+                        storeId = parsedStore;
+                    }
+
+                    // Try to find game title preceding this button
+                    string title = "";
+                    int searchStart = Math.Max(0, m.Index - 2000);
+                    string preceding = html.Substring(searchStart, m.Index - searchStart);
+                    MatchCollection titleMatches = Regex.Matches(preceding, @"<a\s+class=[""']game-title[""'][^>]*>([^<]+)</a>", RegexOptions.IgnoreCase);
+                    if (titleMatches.Count > 0)
+                    {
+                        title = WebUtility.HtmlDecode(titleMatches[titleMatches.Count - 1].Groups[1].Value.Trim());
+                    }
+
+                    entries.Add(new RemoteLibraryEntry
+                    {
+                        EntryId = entryId,
+                        GameId = gameId,
+                        GameTitle = title,
+                        PlatformId = platId,
+                        OwnershipId = ownId,
+                        StorefrontId = storeId,
+                        EditionId = edStr ?? ""
+                    });
+                    addedOnPage++;
+                }
+
+                if (addedOnPage == 0)
+                {
+                    break;
+                }
+            }
+
+            return entries;
+        }
+
+        private static string ExtractAttr(string tagHtml, string attrName)
+        {
+            Match m = Regex.Match(tagHtml, attrName + @"=[""']([^""']*)[""']", RegexOptions.IgnoreCase);
+            return m.Success ? m.Groups[1].Value.Trim() : "";
+        }
+
+        public static SyncResult SaveLibraryEntry(CollectionEntry entry, AppSettings settings)
+        {
+            var result = new SyncResult { GameId = entry != null ? entry.BackloggdGameId : "" };
+            if (entry == null || string.IsNullOrWhiteSpace(entry.BackloggdGameId))
+            {
+                result.Error = "No Backloggd Game ID mapped for this collection item.";
+                return result;
+            }
+            if (settings == null || string.IsNullOrWhiteSpace(settings.SessionCookie))
+            {
+                result.Error = "Backloggd session cookie is not configured.";
+                return result;
+            }
+
+            // 1. Validate PlatformId against game's valid platforms on Backloggd
+            var options = GetLibraryOptions(entry.BackloggdGameId, settings);
+            int platformId = entry.PlatformId > 0 ? entry.PlatformId : (entry.Source == "Nintendo Switch" ? 130 : 6);
+            if (options.Platforms.Count > 0)
+            {
+                bool hasPlatform = options.Platforms.Exists(p => p.Id == platformId.ToString());
+                if (!hasPlatform)
+                {
+                    if (platformId == 130 && options.Platforms.Exists(p => p.Id == "508"))
+                    {
+                        platformId = 508;
+                    }
+                    else if (platformId == 508 && options.Platforms.Exists(p => p.Id == "130"))
+                    {
+                        platformId = 130;
+                    }
+                    else if (entry.Source == "Steam" && options.Platforms.Exists(p => p.Id == "6"))
+                    {
+                        platformId = 6;
+                    }
+                    else
+                    {
+                        int fallbackPlat;
+                        if (int.TryParse(options.Platforms[0].Id, out fallbackPlat))
+                        {
+                            platformId = fallbackPlat;
+                        }
+                    }
+                    entry.PlatformId = platformId;
+                }
+            }
+
+            string storefrontStr = "";
+            if (entry.OwnershipId == 1) // Digital
+            {
+                if (entry.StorefrontId.HasValue && entry.StorefrontId.Value > 0)
+                {
+                    storefrontStr = entry.StorefrontId.Value.ToString();
+                }
+                else if (platformId == 6)
+                {
+                    storefrontStr = "1"; // Steam
+                    entry.StorefrontId = 1;
+                }
+                else if (platformId == 130 || platformId == 508)
+                {
+                    storefrontStr = "8"; // Nintendo eShop
+                    entry.StorefrontId = 8;
+                }
+            }
+            else
+            {
+                entry.StorefrontId = null;
+            }
+
+            string cleanCookie = NormalizeCookie(settings.SessionCookie);
+            var headers = new Dictionary<string, string>
+            {
+                { "Content-Type", "application/x-www-form-urlencoded; charset=UTF-8" },
+                { "Accept", "text/vnd.turbo-stream.html, text/html, */*" },
+                { "X-Requested-With", "XMLHttpRequest" }
+            };
+            if (!string.IsNullOrEmpty(settings.CsrfToken))
+            {
+                headers["X-CSRF-Token"] = settings.CsrfToken;
+            }
+
+            bool isUpdate = !string.IsNullOrWhiteSpace(entry.BackloggdLibraryEntryId);
+            HttpResp res = null;
+
+            if (isUpdate)
+            {
+                var patchPairs = new List<KeyValuePair<string, string>>
+                {
+                    new KeyValuePair<string, string>("platform_id", platformId.ToString()),
+                    new KeyValuePair<string, string>("ownership_id", entry.OwnershipId.ToString()),
+                    new KeyValuePair<string, string>("storefront_id", storefrontStr),
+                    new KeyValuePair<string, string>("edition_id", entry.EditionId ?? ""),
+                    new KeyValuePair<string, string>("group_by", "none")
+                };
+                string patchUrl = BaseUrl + "/library/entry/" + entry.BackloggdLibraryEntryId.Trim();
+                res = SendRequest(patchUrl, "PATCH", cleanCookie, headers, BuildFormUrlEncoded(patchPairs));
+                if (res.StatusCode == 401 || res.StatusCode == 403 || res.StatusCode == 422)
+                {
+                    string freshCsrf = FetchFreshCsrfToken(cleanCookie);
+                    if (!string.IsNullOrEmpty(freshCsrf))
+                    {
+                        settings.CsrfToken = freshCsrf;
+                        DataStore.SaveSettings(settings);
+                        headers["X-CSRF-Token"] = freshCsrf;
+                        res = SendRequest(patchUrl, "PATCH", cleanCookie, headers, BuildFormUrlEncoded(patchPairs));
+                    }
+                }
+                if (res.StatusCode == 404)
+                {
+                    isUpdate = false;
+                    entry.BackloggdLibraryEntryId = "";
+                }
+            }
+
+            if (!isUpdate)
+            {
+                var postPairs = new List<KeyValuePair<string, string>>
+                {
+                    new KeyValuePair<string, string>("game_id", entry.BackloggdGameId.Trim()),
+                    new KeyValuePair<string, string>("platform_id", platformId.ToString()),
+                    new KeyValuePair<string, string>("ownership_id", entry.OwnershipId.ToString()),
+                    new KeyValuePair<string, string>("storefront_id", storefrontStr),
+                    new KeyValuePair<string, string>("edition_id", entry.EditionId ?? "")
+                };
+                string postUrl = BaseUrl + "/library/entry";
+                res = SendRequest(postUrl, "POST", cleanCookie, headers, BuildFormUrlEncoded(postPairs));
+                if (res.StatusCode == 401 || res.StatusCode == 403)
+                {
+                    string freshCsrf = FetchFreshCsrfToken(cleanCookie);
+                    if (!string.IsNullOrEmpty(freshCsrf))
+                    {
+                        settings.CsrfToken = freshCsrf;
+                        DataStore.SaveSettings(settings);
+                        headers["X-CSRF-Token"] = freshCsrf;
+                        res = SendRequest(postUrl, "POST", cleanCookie, headers, BuildFormUrlEncoded(postPairs));
+                    }
+                }
+            }
+
+            // Note: HTTP 422 on POST /library/entry means the game already has a library entry on Backloggd
+            if (res != null && (res.Ok || (!isUpdate && res.StatusCode == 422)))
+            {
+                result.Success = true;
+                return result;
+            }
+
+            result.Success = false;
+            result.Error = res != null
+                ? string.Format("Backloggd library save failed (HTTP {0})", res.StatusCode)
+                : "Backloggd library save failed";
+            return result;
+        }
+
+        public static bool DeleteLibraryEntry(string entryId, AppSettings settings)
+        {
+            if (string.IsNullOrWhiteSpace(entryId) || settings == null || string.IsNullOrWhiteSpace(settings.SessionCookie))
+            {
+                return false;
+            }
+
+            string cleanCookie = NormalizeCookie(settings.SessionCookie);
+            var headers = new Dictionary<string, string>
+            {
+                { "Accept", "text/vnd.turbo-stream.html, text/html, */*" },
+                { "X-Requested-With", "XMLHttpRequest" }
+            };
+            if (!string.IsNullOrEmpty(settings.CsrfToken))
+            {
+                headers["X-CSRF-Token"] = settings.CsrfToken;
+            }
+
+            string url = BaseUrl + "/library/entry/" + entryId.Trim();
+            var res = SendRequest(url, "DELETE", cleanCookie, headers);
+            if (res.StatusCode == 401 || res.StatusCode == 403 || res.StatusCode == 422)
+            {
+                string freshCsrf = FetchFreshCsrfToken(cleanCookie);
+                if (!string.IsNullOrEmpty(freshCsrf))
+                {
+                    settings.CsrfToken = freshCsrf;
+                    DataStore.SaveSettings(settings);
+                    headers["X-CSRF-Token"] = freshCsrf;
+                    res = SendRequest(url, "DELETE", cleanCookie, headers);
+                }
+            }
+            return res.Ok || res.StatusCode == 404;
+        }
     }
 }

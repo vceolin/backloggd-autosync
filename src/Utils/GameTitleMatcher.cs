@@ -9,7 +9,7 @@ namespace BackloggdAutoSync
     {
         private static readonly Regex SymbolsRegex = new Regex(@"[™®©]", RegexOptions.Compiled);
         private static readonly Regex EditionDashRegex = new Regex(
-            @"\s*-\s*(?:Digital\s+)?(?:Deluxe|Collector's|Definitive|Game of the Year|GOTY|Enhanced|Special|Director's Cut|Remastered|Complete|Ultimate|Standard|Edition).*$",
+            @"\s*[–—-]\s*(?:Digital\s+)?(?:Nintendo\s+Switch(?:\s+2)?\s+Edition|Deluxe|Collector's|Definitive|Game of the Year|GOTY|Enhanced|Special|Director's Cut|Remastered|Complete|Ultimate|Standard|Edition).*$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex EditionParenRegex = new Regex(
             @"\s*\((?:Standard|Deluxe|Definitive|Collector's|Enhanced|Remastered|GOTY)\s+Edition\)",
