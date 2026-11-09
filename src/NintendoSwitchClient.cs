@@ -683,7 +683,10 @@ namespace BackloggdAutoSync
                     string.Equals(t, "Hulu", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(t, "Crunchyroll", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(t, "Twitch", StringComparison.OrdinalIgnoreCase) ||
-                    t.IndexOf("Nintendo Classics", StringComparison.OrdinalIgnoreCase) >= 0)
+                    t.IndexOf("Nintendo Classics", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    t.IndexOf("Nintendo Switch Online", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    t.EndsWith(" Demo", StringComparison.OrdinalIgnoreCase) ||
+                    t.EndsWith("(Demo)", StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }

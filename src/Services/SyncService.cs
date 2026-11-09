@@ -766,12 +766,55 @@ namespace BackloggdAutoSync
                 }
             }
 
-            // Remove any non-game Switch entries that might have been saved previously
+            // Remove any non-game Switch or Steam entries that might have been saved previously
             collection.RemoveAll(c =>
-                c.Source == "Nintendo Switch" &&
-                NintendoSwitchClient.IsNonGameSwitchApp(c.SwitchApplicationId, c.LocalTitle));
+                (c.Source == "Nintendo Switch" && NintendoSwitchClient.IsNonGameSwitchApp(c.SwitchApplicationId, c.LocalTitle)) ||
+                (c.Source == "Steam" && SteamLibrary.IsNonGameTitle(c.AppId, c.LocalTitle)));
 
-            // 3. Reconcile with existing remote Backloggd Library Entries
+            // 3. Cross-platform mapping reuse: if a game with the exact same normalized title is already mapped (e.g., on Switch or another Steam AppID), reuse that BackloggdGameId
+            var knownByNormTitle = new Dictionary<string, GameMapping>(StringComparer.OrdinalIgnoreCase);
+            foreach (var m in mappings)
+            {
+                if (string.IsNullOrEmpty(m.BackloggdGameId)) continue;
+                string n1 = GameTitleMatcher.NormalizeTitle(GameTitleMatcher.CleanGameTitle(m.SteamTitle));
+                string n2 = GameTitleMatcher.NormalizeTitle(GameTitleMatcher.CleanGameTitle(m.BackloggdTitle));
+                if (!string.IsNullOrEmpty(n1) && !knownByNormTitle.ContainsKey(n1)) knownByNormTitle[n1] = m;
+                if (!string.IsNullOrEmpty(n2) && !knownByNormTitle.ContainsKey(n2)) knownByNormTitle[n2] = m;
+            }
+            bool crossMappedAny = false;
+            foreach (var c in collection)
+            {
+                if (!string.IsNullOrEmpty(c.BackloggdGameId) || c.Excluded) continue;
+                string normLocal = GameTitleMatcher.NormalizeTitle(GameTitleMatcher.CleanGameTitle(c.LocalTitle));
+                GameMapping existingMatch;
+                if (!string.IsNullOrEmpty(normLocal) && knownByNormTitle.TryGetValue(normLocal, out existingMatch))
+                {
+                    c.BackloggdGameId = existingMatch.BackloggdGameId;
+                    c.BackloggdTitle = existingMatch.BackloggdTitle;
+                    c.ReleaseYear = existingMatch.ReleaseYear ?? "";
+                    if (c.AppId != 0 && !mappings.Exists(x => x.AppId == c.AppId))
+                    {
+                        mappings.Add(new GameMapping
+                        {
+                            AppId = c.AppId,
+                            SwitchApplicationId = c.SwitchApplicationId,
+                            BackloggdGameId = existingMatch.BackloggdGameId,
+                            SteamTitle = c.LocalTitle,
+                            BackloggdTitle = existingMatch.BackloggdTitle,
+                            ReleaseYear = existingMatch.ReleaseYear,
+                            ManualOverride = false,
+                            LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                        });
+                        crossMappedAny = true;
+                    }
+                }
+            }
+            if (crossMappedAny)
+            {
+                DataStore.SaveMappings(mappings);
+            }
+
+            // 4. Reconcile with existing remote Backloggd Library Entries
             if (fetchRemoteSources && !string.IsNullOrWhiteSpace(settings.SessionCookie) && !string.IsNullOrWhiteSpace(settings.UserId))
             {
                 try
@@ -866,6 +909,79 @@ namespace BackloggdAutoSync
 
             DataStore.SaveCollection(collection);
             return collection;
+        }
+
+        public int AutoMatchCollectionEntries(List<CollectionEntry> targetEntries, Action<int, int, string> onProgress = null)
+        {
+            if (targetEntries == null || targetEntries.Count == 0) return 0;
+
+            var settings = DataStore.LoadSettings();
+            if (string.IsNullOrWhiteSpace(settings.SessionCookie)) return 0;
+
+            var collection = DataStore.LoadCollection();
+            var mappings = DataStore.LoadMappings();
+            var dataLock = new object();
+            int matched = 0;
+            int completed = 0;
+            int total = targetEntries.Count;
+
+            var options = new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 2 };
+            System.Threading.Tasks.Parallel.ForEach(targetEntries, options, t =>
+            {
+                int idx = Interlocked.Increment(ref completed);
+                if (onProgress != null && (idx % 3 == 0 || idx == total || idx == 1))
+                {
+                    try { onProgress(idx, total, t.LocalTitle); } catch { }
+                }
+
+                try
+                {
+                    var results = BackloggdClient.SearchGame(t.LocalTitle, settings);
+                    var best = BackloggdClient.SelectBestMatch(t.LocalTitle, results);
+                    if (best != null)
+                    {
+                        lock (dataLock)
+                        {
+                            var stored = collection.Find(x => x.Id == t.Id);
+                            if (stored != null)
+                            {
+                                stored.BackloggdGameId = best.GameId;
+                                stored.BackloggdTitle = best.Title;
+                                stored.ReleaseYear = best.ReleaseYear ?? "";
+                                stored.LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                            }
+
+                            if (t.AppId != 0)
+                            {
+                                mappings.RemoveAll(m => m.AppId == t.AppId);
+                                mappings.Add(new GameMapping
+                                {
+                                    AppId = t.AppId,
+                                    SwitchApplicationId = t.SwitchApplicationId,
+                                    BackloggdGameId = best.GameId,
+                                    SteamTitle = t.LocalTitle,
+                                    BackloggdTitle = best.Title,
+                                    ReleaseYear = best.ReleaseYear,
+                                    ManualOverride = false,
+                                    LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                                });
+                            }
+                            matched++;
+                            if (matched % 25 == 0)
+                            {
+                                DataStore.SaveCollection(collection);
+                                DataStore.SaveMappings(mappings);
+                            }
+                        }
+                    }
+                    Thread.Sleep(120);
+                }
+                catch { }
+            });
+
+            DataStore.SaveCollection(collection);
+            DataStore.SaveMappings(mappings);
+            return matched;
         }
     }
 }

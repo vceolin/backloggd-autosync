@@ -123,14 +123,19 @@ namespace BackloggdAutoSync
             return libraryDirs;
         }
 
-        private static bool IsNonGameTitle(int appId, string name)
+        private static readonly Regex NonGameDemoTestRegex = new Regex(
+            @"(?:\bPublic\s+Test(?:\s+Server)?\b|\bTest\s+Server\b|\bExperimental\s+Server\b|\bClosed\s+Beta\b|\bOpen\s+Beta\b|\bBeta\s+Test\b|\s+Beta$|\bPlaytest\b|\b1-Shot\s+Demo\b|\bRaccoon\s+City\s+Demo\b|\s+Demo$|\(Demo\))",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        public static bool IsNonGameTitle(int appId, string name)
         {
             if (appId <= 0 || appId == 480) return true; // 480 = Spacewar (Steamworks SDK test app)
             if (string.IsNullOrWhiteSpace(name)) return true;
             if (name.IndexOf("Proton ", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 name.IndexOf("Steamworks Common", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 name.IndexOf("Steam Linux Runtime", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                name.IndexOf("Dedicated Server", StringComparison.OrdinalIgnoreCase) >= 0)
+                name.IndexOf("Dedicated Server", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                NonGameDemoTestRegex.IsMatch(name))
             {
                 return true;
             }

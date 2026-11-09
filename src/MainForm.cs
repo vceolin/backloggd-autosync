@@ -1030,70 +1030,17 @@ namespace BackloggdAutoSync
 
             ThreadPool.QueueUserWorkItem(_ =>
             {
-                int matched = 0;
                 int total = targetEntries.Count;
-                var collection = DataStore.LoadCollection();
-                var mappings = DataStore.LoadMappings();
-
-                for (int i = 0; i < targetEntries.Count; i++)
+                int matched = _tracker.SyncService.AutoMatchCollectionEntries(targetEntries, (idx, tot, title) =>
                 {
-                    var t = targetEntries[i];
-                    int idx = i + 1;
                     if (IsHandleCreated && !IsDisposed)
                     {
                         BeginInvoke(new Action(() =>
                         {
-                            _lblCollectionSummary.Text = string.Format("Auto-matching ({0}/{1}): {2}...", idx, total, t.LocalTitle);
+                            _lblCollectionSummary.Text = string.Format("Auto-matching ({0}/{1}): {2}...", idx, tot, title);
                         }));
                     }
-
-                    try
-                    {
-                        string clean = BackloggdClient.CleanGameTitle(t.LocalTitle);
-                        var results = BackloggdClient.SearchGame(clean, _settings);
-                        if (results.Count == 0 && clean != t.LocalTitle)
-                        {
-                            results = BackloggdClient.SearchGame(t.LocalTitle, _settings);
-                        }
-                        var best = BackloggdClient.SelectBestMatch(clean, results) ?? (results.Count > 0 ? results[0] : null);
-                        if (best != null)
-                        {
-                            var stored = collection.Find(x => x.Id == t.Id);
-                            if (stored != null)
-                            {
-                                stored.BackloggdGameId = best.GameId;
-                                stored.BackloggdTitle = best.Title;
-                                stored.LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                            }
-
-                            if (t.AppId != 0)
-                            {
-                                mappings.RemoveAll(m => m.AppId == t.AppId);
-                                mappings.Add(new GameMapping
-                                {
-                                    AppId = t.AppId,
-                                    BackloggdGameId = best.GameId,
-                                    SteamTitle = t.LocalTitle,
-                                    BackloggdTitle = best.Title,
-                                    ReleaseYear = best.ReleaseYear,
-                                    ManualOverride = false,
-                                    LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                                });
-                            }
-                            matched++;
-                            if (matched % 10 == 0)
-                            {
-                                DataStore.SaveCollection(collection);
-                                DataStore.SaveMappings(mappings);
-                            }
-                        }
-                        Thread.Sleep(220);
-                    }
-                    catch { }
-                }
-
-                DataStore.SaveCollection(collection);
-                DataStore.SaveMappings(mappings);
+                });
 
                 if (IsHandleCreated && !IsDisposed)
                 {
@@ -1942,13 +1889,8 @@ namespace BackloggdAutoSync
 
                     try
                     {
-                        string clean = BackloggdClient.CleanGameTitle(g.Title);
-                        var results = BackloggdClient.SearchGame(clean, _settings);
-                        if (results.Count == 0 && clean != g.Title)
-                        {
-                            results = BackloggdClient.SearchGame(g.Title, _settings);
-                        }
-                        var best = BackloggdClient.SelectBestMatch(clean, results) ?? (results.Count > 0 ? results[0] : null);
+                        var results = BackloggdClient.SearchGame(g.Title, _settings);
+                        var best = BackloggdClient.SelectBestMatch(g.Title, results) ?? (results.Count > 0 ? results[0] : null);
                         if (best != null)
                         {
                             mappings.RemoveAll(m => m.AppId == g.AppId);

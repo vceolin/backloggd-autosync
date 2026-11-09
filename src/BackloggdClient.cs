@@ -258,13 +258,21 @@ namespace BackloggdAutoSync
             var results = new List<GameSearchResult>();
             if (string.IsNullOrWhiteSpace(title)) return results;
 
-            string query = GameTitleMatcher.StripDiacritics(title.Trim());
-            results = ExecuteAutocompleteSearch(query, settings);
-
-            // If stripped query differed from raw query and returned nothing, also try raw query as fallback
-            if (results.Count == 0 && !string.Equals(query, title.Trim(), StringComparison.Ordinal))
+            var candidates = GameTitleMatcher.GetSearchQueryCandidates(title);
+            foreach (string candidate in candidates)
             {
-                results = ExecuteAutocompleteSearch(title.Trim(), settings);
+                results = ExecuteAutocompleteSearch(candidate, settings);
+                if (results.Count > 0)
+                {
+                    return results;
+                }
+            }
+
+            // Fallback to raw trimmed title if not already tried
+            string rawTrimmed = title.Trim();
+            if (!candidates.Contains(rawTrimmed))
+            {
+                results = ExecuteAutocompleteSearch(rawTrimmed, settings);
             }
 
             return results;
@@ -289,6 +297,11 @@ namespace BackloggdAutoSync
             }
 
             var res = SendRequest(url, "GET", cleanCookie, headers);
+            for (int attempt = 1; attempt <= 3 && (res.StatusCode == 429 || res.StatusCode >= 500); attempt++)
+            {
+                System.Threading.Thread.Sleep(1500 * attempt);
+                res = SendRequest(url, "GET", cleanCookie, headers);
+            }
             if (!res.Ok)
             {
                 throw new Exception("Backloggd search returned HTTP " + res.StatusCode);

@@ -122,5 +122,47 @@ namespace BackloggdAutoSync.Tests
             Assert.IsNull(GameTitleMatcher.SelectBestMatch("Anything", null));
             Assert.IsNull(GameTitleMatcher.SelectBestMatch("Anything", new List<GameSearchResult>()));
         }
+
+        [Test]
+        public void Should_Generate_Search_Query_Candidates_And_Match_Steam_Titles()
+        {
+            var gtaCandidates = GameTitleMatcher.GetSearchQueryCandidates("Grand Theft Auto IV: The Complete Edition");
+            Assert.IsTrue(gtaCandidates.Contains("Grand Theft Auto IV"));
+
+            var codCandidates = GameTitleMatcher.GetSearchQueryCandidates("Call of Duty: Black Ops II - Multiplayer");
+            Assert.IsTrue(codCandidates.Contains("Call of Duty: Black Ops II"));
+
+            var mafiaCandidates = GameTitleMatcher.GetSearchQueryCandidates("Mafia II (Classic)");
+            Assert.IsTrue(mafiaCandidates.Contains("Mafia II"));
+
+            var segaCandidates = GameTitleMatcher.GetSearchQueryCandidates("SEGA Mega Drive & Genesis Classics");
+            Assert.IsTrue(segaCandidates.Contains("SEGA Mega Drive and Genesis Classics"));
+
+            // Matching & vs "and"
+            var segaMatch = GameTitleMatcher.SelectBestMatch("SEGA Mega Drive & Genesis Classics", new List<GameSearchResult>
+            {
+                new GameSearchResult { GameId = "102190", Title = "Sega Mega Drive and Genesis Classics", ReleaseYear = "2010" }
+            });
+            Assert.IsNotNull(segaMatch);
+            Assert.AreEqual("102190", segaMatch.GameId);
+
+            // Matching franchise prefix ("Tom Clancy's ")
+            var ghostReconMatch = GameTitleMatcher.SelectBestMatch("Ghost Recon Breakpoint", new List<GameSearchResult>
+            {
+                new GameSearchResult { GameId = "118218", Title = "Tom Clancy's Ghost Recon: Breakpoint", ReleaseYear = "2019" },
+                new GameSearchResult { GameId = "118219", Title = "Tom Clancy's Ghost Recon: Wildlands", ReleaseYear = "2017" }
+            });
+            Assert.IsNotNull(ghostReconMatch);
+            Assert.AreEqual("118218", ghostReconMatch.GameId);
+
+            // Matching release year in parentheses ("Resident Evil 4 (2005)")
+            var re4Match = GameTitleMatcher.SelectBestMatch("Resident Evil 4 (2005)", new List<GameSearchResult>
+            {
+                new GameSearchResult { GameId = "196860", Title = "Resident Evil 4", ReleaseYear = "2023" },
+                new GameSearchResult { GameId = "974", Title = "Resident Evil 4", ReleaseYear = "2005" }
+            });
+            Assert.IsNotNull(re4Match);
+            Assert.AreEqual("974", re4Match.GameId);
+        }
     }
 }
