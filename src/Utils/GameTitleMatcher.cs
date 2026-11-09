@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -16,6 +17,28 @@ namespace BackloggdAutoSync
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex WhitespaceRegex = new Regex(@"\s+", RegexOptions.Compiled);
 
+        public static string StripDiacritics(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+
+            string normalized = text.Normalize(NormalizationForm.FormD);
+            var sb = new StringBuilder(normalized.Length);
+            for (int i = 0; i < normalized.Length; i++)
+            {
+                char c = normalized[i];
+                UnicodeCategory cat = CharUnicodeInfo.GetUnicodeCategory(c);
+                if (cat != UnicodeCategory.NonSpacingMark &&
+                    cat != UnicodeCategory.SpacingCombiningMark &&
+                    cat != UnicodeCategory.EnclosingMark)
+                {
+                    if (c == '’' || c == '‘') sb.Append('\'');
+                    else if (c == '–' || c == '—') sb.Append('-');
+                    else sb.Append(c);
+                }
+            }
+            return sb.ToString().Normalize(NormalizationForm.FormC);
+        }
+
         public static string CleanGameTitle(string rawTitle)
         {
             if (string.IsNullOrWhiteSpace(rawTitle)) return "";
@@ -31,10 +54,11 @@ namespace BackloggdAutoSync
         {
             if (string.IsNullOrEmpty(title)) return "";
 
-            var sb = new StringBuilder(title.Length);
-            for (int i = 0; i < title.Length; i++)
+            string stripped = StripDiacritics(title);
+            var sb = new StringBuilder(stripped.Length);
+            for (int i = 0; i < stripped.Length; i++)
             {
-                char c = char.ToLowerInvariant(title[i]);
+                char c = char.ToLowerInvariant(stripped[i]);
                 if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
                 {
                     sb.Append(c);

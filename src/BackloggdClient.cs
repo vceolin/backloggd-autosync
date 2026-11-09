@@ -258,8 +258,25 @@ namespace BackloggdAutoSync
             var results = new List<GameSearchResult>();
             if (string.IsNullOrWhiteSpace(title)) return results;
 
+            string query = GameTitleMatcher.StripDiacritics(title.Trim());
+            results = ExecuteAutocompleteSearch(query, settings);
+
+            // If stripped query differed from raw query and returned nothing, also try raw query as fallback
+            if (results.Count == 0 && !string.Equals(query, title.Trim(), StringComparison.Ordinal))
+            {
+                results = ExecuteAutocompleteSearch(title.Trim(), settings);
+            }
+
+            return results;
+        }
+
+        private static List<GameSearchResult> ExecuteAutocompleteSearch(string query, AppSettings settings)
+        {
+            var results = new List<GameSearchResult>();
+            if (string.IsNullOrWhiteSpace(query)) return results;
+
             string cleanCookie = NormalizeCookie(settings.SessionCookie);
-            string url = BaseUrl + "/search/autocomplete/?query=" + Uri.EscapeDataString(title.Trim());
+            string url = BaseUrl + "/search/autocomplete/?query=" + Uri.EscapeDataString(query);
 
             var headers = new Dictionary<string, string>
             {

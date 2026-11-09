@@ -60,6 +60,8 @@ namespace BackloggdAutoSync.Tests
             Assert.AreEqual("grandtheftautov", GameTitleMatcher.NormalizeTitle("Grand Theft Auto V"));
             Assert.AreEqual("halflife2", GameTitleMatcher.NormalizeTitle("Half-Life 2"));
             Assert.AreEqual("nierautomata", GameTitleMatcher.NormalizeTitle("NieR: Automata™"));
+            Assert.AreEqual("pokemonlegendsarceus", GameTitleMatcher.NormalizeTitle("Pokémon Legends: Arceus"));
+            Assert.AreEqual("Pokemon Legends: Arceus", GameTitleMatcher.StripDiacritics("Pokémon Legends: Arceus"));
             Assert.AreEqual("", GameTitleMatcher.NormalizeTitle(""));
             Assert.AreEqual("", GameTitleMatcher.NormalizeTitle(null));
         }

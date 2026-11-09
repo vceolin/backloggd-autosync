@@ -781,7 +781,7 @@ namespace BackloggdAutoSync
             }
 
             string filterMode = _cmbCollectionFilter.SelectedItem != null ? _cmbCollectionFilter.SelectedItem.ToString() : "All Owned Games";
-            string search = (_txtCollectionSearch.Text ?? "").Trim().ToLowerInvariant();
+            string search = GameTitleMatcher.StripDiacritics((_txtCollectionSearch.Text ?? "").Trim()).ToLowerInvariant();
             bool showHidden = _chkCollectionShowHidden.Checked;
 
             int totalOwned = 0;
@@ -821,11 +821,11 @@ namespace BackloggdAutoSync
                 if (filterMode == "Unmapped Only" && !string.IsNullOrEmpty(c.BackloggdGameId)) continue;
                 if (filterMode == "Synced on Backloggd" && !c.Synced) continue;
 
-                // Apply search text
+                // Apply search text (diacritic-insensitive so both "pokemon" and "pokémon" match)
                 if (!string.IsNullOrEmpty(search))
                 {
-                    string t1 = (c.LocalTitle ?? "").ToLowerInvariant();
-                    string t2 = (c.BackloggdTitle ?? "").ToLowerInvariant();
+                    string t1 = GameTitleMatcher.StripDiacritics(c.LocalTitle ?? "").ToLowerInvariant();
+                    string t2 = GameTitleMatcher.StripDiacritics(c.BackloggdTitle ?? "").ToLowerInvariant();
                     string idStr = c.AppId.ToString();
                     if (!t1.Contains(search) && !t2.Contains(search) && !idStr.Contains(search)) continue;
                 }
