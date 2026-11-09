@@ -88,10 +88,103 @@ namespace BackloggdAutoSync
             public int StatusCode;
             public string Body;
             public string Error;
+            public int RetryAfterSeconds;
             public bool Ok { get { return StatusCode >= 200 && StatusCode < 300; } }
         }
 
-        private static HttpResp SendRequest(string url, string method, string cleanCookie, Dictionary<string, string> extraHeaders, string body = null)
+        private static long _rateLimitCooldownUntilTicks = 0;
+        private static readonly object _backoffLock = new object();
+        private static readonly Random _jitterRng = new Random();
+
+        public static int ComputeExponentialBackoffMs(int attempt, int retryAfterSeconds = 0, int baseDelayMs = 2000, int maxDelayMs = 60000)
+        {
+            if (attempt < 1) attempt = 1;
+            int shift = Math.Min(attempt - 1, 5);
+            int expDelay = Math.Min(maxDelayMs, baseDelayMs * (1 << shift));
+            if (retryAfterSeconds > 0)
+            {
+                expDelay = Math.Max(expDelay, Math.Min(maxDelayMs, retryAfterSeconds * 1000));
+            }
+            int jitter;
+            lock (_backoffLock)
+            {
+                jitter = _jitterRng.Next(100, 750);
+            }
+            return expDelay + jitter;
+        }
+
+        private static void WaitIfRateLimitCooldownActive()
+        {
+            long untilTicks = System.Threading.Interlocked.Read(ref _rateLimitCooldownUntilTicks);
+            if (untilTicks <= 0) return;
+
+            long nowTicks = DateTime.UtcNow.Ticks;
+            if (untilTicks > nowTicks)
+            {
+                int waitMs = (int)TimeSpan.FromTicks(untilTicks - nowTicks).TotalMilliseconds;
+                if (waitMs > 0 && waitMs <= 120000)
+                {
+                    System.Threading.Thread.Sleep(waitMs);
+                }
+            }
+        }
+
+        private static void RegisterRateLimitCooldown(int waitMs)
+        {
+            long targetTicks = DateTime.UtcNow.AddMilliseconds(waitMs).Ticks;
+            lock (_backoffLock)
+            {
+                if (targetTicks > _rateLimitCooldownUntilTicks)
+                {
+                    _rateLimitCooldownUntilTicks = targetTicks;
+                }
+            }
+        }
+
+        private static HttpResp SendRequest(string url, string method, string cleanCookie, Dictionary<string, string> extraHeaders, string body = null, int maxRetries = 5)
+        {
+            HttpResp resp = null;
+            for (int attempt = 0; attempt <= maxRetries; attempt++)
+            {
+                WaitIfRateLimitCooldownActive();
+                resp = SendRequestOnce(url, method, cleanCookie, extraHeaders, body);
+
+                bool isRetryable = resp.StatusCode == 429 ||
+                                   resp.StatusCode == 502 ||
+                                   resp.StatusCode == 503 ||
+                                   resp.StatusCode == 504 ||
+                                   resp.StatusCode == 0;
+
+                if (!isRetryable || attempt == maxRetries)
+                {
+                    return resp;
+                }
+
+                int retryNum = attempt + 1;
+                int waitMs = ComputeExponentialBackoffMs(retryNum, resp.RetryAfterSeconds);
+                if (resp.StatusCode == 429)
+                {
+                    RegisterRateLimitCooldown(waitMs);
+                }
+
+                try
+                {
+                    string shortPath = url.StartsWith(BaseUrl, StringComparison.OrdinalIgnoreCase)
+                        ? url.Substring(BaseUrl.Length)
+                        : url;
+                    DataStore.Log(string.Format(
+                        "Backloggd HTTP {0} on {1} {2} — backing off {3:0.0}s (retry {4}/{5})...",
+                        resp.StatusCode, method, shortPath, waitMs / 1000.0, retryNum, maxRetries));
+                }
+                catch { }
+
+                System.Threading.Thread.Sleep(waitMs);
+            }
+
+            return resp ?? new HttpResp { StatusCode = 0, Error = "Request failed after retries" };
+        }
+
+        private static HttpResp SendRequestOnce(string url, string method, string cleanCookie, Dictionary<string, string> extraHeaders, string body = null)
         {
             var resp = new HttpResp();
             try
@@ -147,6 +240,16 @@ namespace BackloggdAutoSync
                 if (errResp != null)
                 {
                     resp.StatusCode = (int)errResp.StatusCode;
+                    try
+                    {
+                        string retryAfterHdr = errResp.Headers["Retry-After"];
+                        int parsedRetryAfter;
+                        if (!string.IsNullOrEmpty(retryAfterHdr) && int.TryParse(retryAfterHdr.Trim(), out parsedRetryAfter) && parsedRetryAfter > 0)
+                        {
+                            resp.RetryAfterSeconds = parsedRetryAfter;
+                        }
+                    }
+                    catch { }
                     try
                     {
                         using (StreamReader sr = new StreamReader(errResp.GetResponseStream(), Encoding.UTF8))
@@ -297,11 +400,6 @@ namespace BackloggdAutoSync
             }
 
             var res = SendRequest(url, "GET", cleanCookie, headers);
-            for (int attempt = 1; attempt <= 3 && (res.StatusCode == 429 || res.StatusCode >= 500); attempt++)
-            {
-                System.Threading.Thread.Sleep(1500 * attempt);
-                res = SendRequest(url, "GET", cleanCookie, headers);
-            }
             if (!res.Ok)
             {
                 throw new Exception("Backloggd search returned HTTP " + res.StatusCode);
@@ -1184,6 +1282,7 @@ namespace BackloggdAutoSync
                 {
                     break;
                 }
+                System.Threading.Thread.Sleep(120);
             }
 
             return entries;
@@ -1193,6 +1292,48 @@ namespace BackloggdAutoSync
         {
             Match m = Regex.Match(tagHtml, attrName + @"=[""']([^""']*)[""']", RegexOptions.IgnoreCase);
             return m.Success ? m.Groups[1].Value.Trim() : "";
+        }
+
+        private static int ResolveValidPlatformId(CollectionEntry entry, int currentPlatId, BackloggdLibraryOptions options)
+        {
+            if (options == null || options.Platforms.Count == 0) return currentPlatId;
+            if (options.Platforms.Exists(p => p.Id == currentPlatId.ToString())) return currentPlatId;
+
+            if (currentPlatId == 130 && options.Platforms.Exists(p => p.Id == "508")) return 508;
+            if (currentPlatId == 508 && options.Platforms.Exists(p => p.Id == "130")) return 130;
+            if (entry.Source == "Steam" && options.Platforms.Exists(p => p.Id == "6")) return 6;
+
+            int fallbackPlat;
+            if (int.TryParse(options.Platforms[0].Id, out fallbackPlat))
+            {
+                return fallbackPlat;
+            }
+            return currentPlatId;
+        }
+
+        private static string ResolveStorefrontString(CollectionEntry entry, int platformId)
+        {
+            if (entry.OwnershipId == 1) // Digital
+            {
+                if (entry.StorefrontId.HasValue && entry.StorefrontId.Value > 0)
+                {
+                    return entry.StorefrontId.Value.ToString();
+                }
+                if (platformId == 6)
+                {
+                    entry.StorefrontId = 1; // Steam
+                    return "1";
+                }
+                if (platformId == 130 || platformId == 508)
+                {
+                    entry.StorefrontId = 8; // Nintendo eShop
+                    return "8";
+                }
+                return "";
+            }
+
+            entry.StorefrontId = null;
+            return "";
         }
 
         public static SyncResult SaveLibraryEntry(CollectionEntry entry, AppSettings settings)
@@ -1209,60 +1350,9 @@ namespace BackloggdAutoSync
                 return result;
             }
 
-            // 1. Validate PlatformId against game's valid platforms on Backloggd
-            var options = GetLibraryOptions(entry.BackloggdGameId, settings);
             int platformId = entry.PlatformId > 0 ? entry.PlatformId : (entry.Source == "Nintendo Switch" ? 130 : 6);
-            if (options.Platforms.Count > 0)
-            {
-                bool hasPlatform = options.Platforms.Exists(p => p.Id == platformId.ToString());
-                if (!hasPlatform)
-                {
-                    if (platformId == 130 && options.Platforms.Exists(p => p.Id == "508"))
-                    {
-                        platformId = 508;
-                    }
-                    else if (platformId == 508 && options.Platforms.Exists(p => p.Id == "130"))
-                    {
-                        platformId = 130;
-                    }
-                    else if (entry.Source == "Steam" && options.Platforms.Exists(p => p.Id == "6"))
-                    {
-                        platformId = 6;
-                    }
-                    else
-                    {
-                        int fallbackPlat;
-                        if (int.TryParse(options.Platforms[0].Id, out fallbackPlat))
-                        {
-                            platformId = fallbackPlat;
-                        }
-                    }
-                    entry.PlatformId = platformId;
-                }
-            }
-
-            string storefrontStr = "";
-            if (entry.OwnershipId == 1) // Digital
-            {
-                if (entry.StorefrontId.HasValue && entry.StorefrontId.Value > 0)
-                {
-                    storefrontStr = entry.StorefrontId.Value.ToString();
-                }
-                else if (platformId == 6)
-                {
-                    storefrontStr = "1"; // Steam
-                    entry.StorefrontId = 1;
-                }
-                else if (platformId == 130 || platformId == 508)
-                {
-                    storefrontStr = "8"; // Nintendo eShop
-                    entry.StorefrontId = 8;
-                }
-            }
-            else
-            {
-                entry.StorefrontId = null;
-            }
+            entry.PlatformId = platformId;
+            string storefrontStr = ResolveStorefrontString(entry, platformId);
 
             string cleanCookie = NormalizeCookie(settings.SessionCookie);
             var headers = new Dictionary<string, string>
@@ -1291,7 +1381,7 @@ namespace BackloggdAutoSync
                 };
                 string patchUrl = BaseUrl + "/library/entry/" + entry.BackloggdLibraryEntryId.Trim();
                 res = SendRequest(patchUrl, "PATCH", cleanCookie, headers, BuildFormUrlEncoded(patchPairs));
-                if (res.StatusCode == 401 || res.StatusCode == 403 || res.StatusCode == 422)
+                if (res.StatusCode == 401 || res.StatusCode == 403)
                 {
                     string freshCsrf = FetchFreshCsrfToken(cleanCookie);
                     if (!string.IsNullOrEmpty(freshCsrf))
@@ -1299,6 +1389,21 @@ namespace BackloggdAutoSync
                         settings.CsrfToken = freshCsrf;
                         DataStore.SaveSettings(settings);
                         headers["X-CSRF-Token"] = freshCsrf;
+                        res = SendRequest(patchUrl, "PATCH", cleanCookie, headers, BuildFormUrlEncoded(patchPairs));
+                    }
+                }
+                if (res.StatusCode == 422)
+                {
+                    // Check if platformId needed adjustment
+                    var options = GetLibraryOptions(entry.BackloggdGameId, settings);
+                    int resolvedPlat = ResolveValidPlatformId(entry, platformId, options);
+                    if (resolvedPlat != platformId)
+                    {
+                        platformId = resolvedPlat;
+                        entry.PlatformId = platformId;
+                        storefrontStr = ResolveStorefrontString(entry, platformId);
+                        patchPairs[0] = new KeyValuePair<string, string>("platform_id", platformId.ToString());
+                        patchPairs[2] = new KeyValuePair<string, string>("storefront_id", storefrontStr);
                         res = SendRequest(patchUrl, "PATCH", cleanCookie, headers, BuildFormUrlEncoded(patchPairs));
                     }
                 }
@@ -1332,11 +1437,34 @@ namespace BackloggdAutoSync
                         res = SendRequest(postUrl, "POST", cleanCookie, headers, BuildFormUrlEncoded(postPairs));
                     }
                 }
+                if (res.StatusCode == 422)
+                {
+                    // Check if 422 was caused by an invalid platformId (e.g. Switch 2 exclusive using 130 instead of 508)
+                    var options = GetLibraryOptions(entry.BackloggdGameId, settings);
+                    int resolvedPlat = ResolveValidPlatformId(entry, platformId, options);
+                    if (resolvedPlat != platformId)
+                    {
+                        platformId = resolvedPlat;
+                        entry.PlatformId = platformId;
+                        storefrontStr = ResolveStorefrontString(entry, platformId);
+                        postPairs[1] = new KeyValuePair<string, string>("platform_id", platformId.ToString());
+                        postPairs[3] = new KeyValuePair<string, string>("storefront_id", storefrontStr);
+                        res = SendRequest(postUrl, "POST", cleanCookie, headers, BuildFormUrlEncoded(postPairs));
+                    }
+                }
             }
 
-            // Note: HTTP 422 on POST /library/entry means the game already has a library entry on Backloggd
+            // Note: HTTP 422 on POST /library/entry (after platform validation) means the game already has a library entry on Backloggd
             if (res != null && (res.Ok || (!isUpdate && res.StatusCode == 422)))
             {
+                if (!string.IsNullOrEmpty(res.Body))
+                {
+                    Match entryIdMatch = Regex.Match(res.Body, @"data-library-entry-edit-entry-id-value=[""'](\d+)[""']", RegexOptions.IgnoreCase);
+                    if (entryIdMatch.Success)
+                    {
+                        entry.BackloggdLibraryEntryId = entryIdMatch.Groups[1].Value;
+                    }
+                }
                 result.Success = true;
                 return result;
             }

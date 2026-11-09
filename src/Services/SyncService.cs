@@ -283,6 +283,7 @@ namespace BackloggdAutoSync
                                 allDailyRecords.AddRange(gameDays);
                                 perGameHistoriesFetched++;
                             }
+                            Thread.Sleep(150);
                         }
                         catch (Exception ex)
                         {
@@ -576,6 +577,7 @@ namespace BackloggdAutoSync
                         }
                         DataStore.SaveSessions(sessions);
                         if (OnSessionSynced != null) OnSessionSynced(first);
+                        Thread.Sleep(250);
                     }
                     catch (Exception ex)
                     {
@@ -974,7 +976,7 @@ namespace BackloggdAutoSync
                             }
                         }
                     }
-                    Thread.Sleep(120);
+                    Thread.Sleep(200);
                 }
                 catch { }
             });
@@ -982,6 +984,69 @@ namespace BackloggdAutoSync
             DataStore.SaveCollection(collection);
             DataStore.SaveMappings(mappings);
             return matched;
+        }
+
+        public void SyncCollectionEntries(List<CollectionEntry> entriesToSync, out int syncedCount, out int failedCount, Action<int, int, string> onProgress = null)
+        {
+            syncedCount = 0;
+            failedCount = 0;
+            if (entriesToSync == null || entriesToSync.Count == 0) return;
+
+            var settings = DataStore.LoadSettings();
+            if (string.IsNullOrWhiteSpace(settings.SessionCookie)) return;
+
+            var collection = DataStore.LoadCollection();
+            int total = entriesToSync.Count;
+
+            for (int i = 0; i < entriesToSync.Count; i++)
+            {
+                var item = entriesToSync[i];
+                if (item == null || string.IsNullOrEmpty(item.BackloggdGameId))
+                {
+                    failedCount++;
+                    continue;
+                }
+
+                int idx = i + 1;
+                if (onProgress != null)
+                {
+                    try { onProgress(idx, total, item.BackloggdTitle ?? item.LocalTitle); } catch { }
+                }
+
+                var stored = collection.Find(x => x.Id == item.Id) ?? item;
+                var syncRes = BackloggdClient.SaveLibraryEntry(stored, settings);
+                if (syncRes.Success)
+                {
+                    stored.Synced = true;
+                    stored.SyncError = null;
+                    stored.LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                    syncedCount++;
+                }
+                else
+                {
+                    stored.Synced = false;
+                    stored.SyncError = syncRes.Error;
+                    failedCount++;
+                }
+
+                if ((i + 1) % 5 == 0 || i == entriesToSync.Count - 1)
+                {
+                    DataStore.SaveCollection(collection);
+                }
+                if (i < entriesToSync.Count - 1)
+                {
+                    Thread.Sleep(300);
+                }
+            }
+
+            if (syncedCount > 0)
+            {
+                try
+                {
+                    RefreshCollection(true, null);
+                }
+                catch { }
+            }
         }
     }
 }

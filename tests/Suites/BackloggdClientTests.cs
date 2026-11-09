@@ -60,5 +60,19 @@ namespace BackloggdAutoSync.Tests
             Assert.AreEqual("speedrunner", username);
             Assert.AreEqual("12345", userId);
         }
+
+        [Test]
+        public void Should_Compute_Exponential_Backoff_With_Jitter_And_Retry_After()
+        {
+            int b1 = BackloggdClient.ComputeExponentialBackoffMs(1, 0, 2000, 60000);
+            int b2 = BackloggdClient.ComputeExponentialBackoffMs(2, 0, 2000, 60000);
+            int b3 = BackloggdClient.ComputeExponentialBackoffMs(3, 0, 2000, 60000);
+            int bWithRetryAfter = BackloggdClient.ComputeExponentialBackoffMs(1, 15, 2000, 60000);
+
+            Assert.IsTrue(b1 >= 2100 && b1 < 2800);
+            Assert.IsTrue(b2 >= 4100 && b2 < 4800);
+            Assert.IsTrue(b3 >= 8100 && b3 < 8800);
+            Assert.IsTrue(bWithRetryAfter >= 15100 && bWithRetryAfter < 15800);
+        }
     }
 }

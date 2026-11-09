@@ -1138,59 +1138,18 @@ namespace BackloggdAutoSync
                 int syncedCount = 0;
                 int failedCount = 0;
                 int total = entriesToSync.Count;
-                var collection = DataStore.LoadCollection();
 
-                for (int i = 0; i < entriesToSync.Count; i++)
+                _tracker.SyncService.SyncCollectionEntries(entriesToSync, out syncedCount, out failedCount, (idx, tot, title) =>
                 {
-                    var item = entriesToSync[i];
-                    if (string.IsNullOrEmpty(item.BackloggdGameId))
-                    {
-                        failedCount++;
-                        continue;
-                    }
-
-                    int idx = i + 1;
                     if (IsHandleCreated && !IsDisposed)
                     {
                         BeginInvoke(new Action(() =>
                         {
                             _lblCollectionSummary.Text = string.Format("Syncing to Backloggd Library ({0}/{1}): {2}...",
-                                idx, total, item.BackloggdTitle ?? item.LocalTitle);
+                                idx, tot, title);
                         }));
                     }
-
-                    var stored = collection.Find(x => x.Id == item.Id) ?? item;
-                    var syncRes = BackloggdClient.SaveLibraryEntry(stored, _settings);
-                    if (syncRes.Success)
-                    {
-                        stored.Synced = true;
-                        stored.SyncError = null;
-                        stored.LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                        syncedCount++;
-                    }
-                    else
-                    {
-                        stored.Synced = false;
-                        stored.SyncError = syncRes.Error;
-                        failedCount++;
-                    }
-
-                    if ((i + 1) % 5 == 0 || i == entriesToSync.Count - 1)
-                    {
-                        DataStore.SaveCollection(collection);
-                    }
-                    Thread.Sleep(250);
-                }
-
-                // Reconcile with Backloggd remote library to pick up any newly created entry IDs
-                if (syncedCount > 0)
-                {
-                    try
-                    {
-                        _tracker.SyncService.RefreshCollection(true, null);
-                    }
-                    catch { }
-                }
+                });
 
                 if (IsHandleCreated && !IsDisposed)
                 {

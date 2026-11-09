@@ -889,15 +889,31 @@ namespace BackloggdAutoSync
             while (true)
             {
                 string url = string.Format("{0}/game_titles/{1}?limit=200&offset={2}", StoreHistoryUrl, Uri.EscapeDataString(titleId.Trim()), offset);
-                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-                req.Method = "GET";
-                req.Accept = "application/json";
-                req.UserAgent = StoreUserAgent;
-                req.Headers["Authorization"] = "Bearer " + accessToken;
-                req.Headers["gentry-locale"] = "en-US";
-                req.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+                string json = null;
+                for (int attempt = 1; attempt <= 4; attempt++)
+                {
+                    try
+                    {
+                        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                        req.Method = "GET";
+                        req.Accept = "application/json";
+                        req.UserAgent = StoreUserAgent;
+                        req.Headers["Authorization"] = "Bearer " + accessToken;
+                        req.Headers["gentry-locale"] = "en-US";
+                        req.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
 
-                string json = ReadResponseText(req);
+                        json = ReadResponseText(req);
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        bool retryable = ex.Message.Contains("HTTP 429") || ex.Message.Contains("HTTP 502") ||
+                                         ex.Message.Contains("HTTP 503") || ex.Message.Contains("HTTP 504");
+                        if (!retryable || attempt == 4) throw;
+                        int waitMs = BackloggdClient.ComputeExponentialBackoffMs(attempt, 0, 1500, 30000);
+                        System.Threading.Thread.Sleep(waitMs);
+                    }
+                }
                 var dict = serializer.Deserialize<Dictionary<string, object>>(json);
                 if (dict == null) break;
 
