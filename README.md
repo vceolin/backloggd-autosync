@@ -129,25 +129,6 @@ Backloggd AutoSync connects directly to your Nintendo Account's official **Ninte
 
 ---
 
-## Application Dashboard & Tabs
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│ Backloggd AutoSync                                            [_][X]   │
-│ Live Status: Playing Bastion (00:42:15)  |  Account: skylean [Connected]│
-├────────────────────────────────────────────────────────────────────────┤
-│ [Sessions & Summary]  [Game Mappings]  [Nintendo Switch]  [Settings]   │
-├────────────────────────────────────────────────────────────────────────┤
-│ Today's Total: 1h 45m across 2 games                                   │
-│ ┌────────────────────────────────────────────────────────────────────┐ │
-│ │ Date       | Platform | Title        | Duration | Synced           │ │
-│ │ 2026-10-25 | Steam    | Bastion      | 42m      | [Synced]         │ │
-│ │ 2026-10-25 | Switch   | Mario Kart 8 | 1h 03m   | [Synced]         │ │
-│ └────────────────────────────────────────────────────────────────────┘ │
-│ [🔄 Sync Pending]  [🔍 Pick Game for Session]  [➕ Manual Log]  [❌ Delete] │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
 ### Sessions & Daily Summary
 - **Live Status Header**: Displays the currently active game and real-time session duration.
 - **Session History Table**: Chronological list of recorded sessions showing platform, date, title, duration, and sync status.
@@ -230,71 +211,6 @@ Backloggd AutoSync includes a comprehensive, zero-dependency unit test suite cov
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test.ps1
-```
-
----
-
-## Project Architecture & Data Storage
-
-```
-backloggd-autosync/
-│
-├── BackloggdAutoSync.exe        # Standalone compiled application binary
-├── build.ps1                   # Standalone PowerShell build script (csc.exe)
-├── test.ps1                    # Zero-dependency unit test runner script
-├── app.ico                     # Embedded application icon
-│
-├── src/
-│   ├── Program.cs              # Application entry point, mutex & single-instance IPC
-│   ├── MainForm.cs             # Dark-mode dashboard, Tray icon, UI orchestration
-│   ├── SteamTracker.cs         # Real-time Steam polling, active checkpoints, midnight split
-│   ├── NintendoSwitchClient.cs # Nintendo OAuth token exchange, Parental Controls & Store API client
-│   ├── BackloggdClient.cs      # Backloggd authentication, CSRF handling, search, & session sync
-│   │
-│   ├── Models/                 # Strongly-typed data models
-│   │   ├── AppSettings.cs
-│   │   ├── GameMapping.cs
-│   │   ├── SessionEntry.cs
-│   │   ├── ActiveSessionCheckpoint.cs
-│   │   ├── BackloggdModels.cs
-│   │   ├── NintendoModels.cs
-│   │   └── SteamModels.cs
-│   │
-│   ├── Services/               # Core services
-│   │   ├── SteamLibrary.cs     # Steam directory & manifest (.acf, .vdf) scanner, title resolver
-│   │   └── SyncService.cs      # Session sync orchestration & Nintendo Switch reconciliation
-│   │
-│   ├── Storage/                # Disk persistence
-│   │   └── DataStore.cs        # Thread-safe JSON persistence & file logging
-│   │
-│   ├── UI/                     # UI components & styling
-│   │   ├── UITheme.cs          # Dark-mode color palette & custom control factories
-│   │   └── Dialogs/
-│   │       ├── UnmappedGameDialog.cs # Live auto-suggest dialog for game selection
-│   │       └── ManualLogDialog.cs    # Manual session logging dialog
-│   │
-│   └── Utils/                  # Fast pure helper utilities
-│       ├── GameTitleMatcher.cs # Compiled regex title cleaner & fuzzy match selector
-│       └── TimeUtils.cs        # Playtime duration formatting & threshold calculators
-│
-├── tests/                      # Unit test suite
-│   ├── TestFramework/          # Lightweight assertion & test discovery engine
-│   │   ├── Assert.cs
-│   │   └── TestRunner.cs
-│   └── Suites/                 # Test suites
-│       ├── BackloggdClientTests.cs
-│       ├── DataStoreTests.cs
-│       ├── GameTitleMatcherTests.cs
-│       ├── NintendoSwitchTests.cs
-│       ├── SyncLogicTests.cs
-│       └── TimeUtilsTests.cs
-│
-└── data/                       # Local configuration and persistence (auto-generated)
-    ├── settings.json           # User settings, session cookies, and encrypted auth tokens
-    ├── mappings.json           # Steam AppID & Switch AppID to Backloggd game ID mappings
-    ├── sessions.json           # Local history of recorded & pending diary sessions
-    ├── active_session.json     # 30-second heartbeat checkpoints for crash safety
-    └── activity.log            # Diagnostics, sync timestamps, and error logs
 ```
 
 ---
