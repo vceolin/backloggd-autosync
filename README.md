@@ -60,12 +60,12 @@ All of this happens without overwriting your existing reviews, ratings, notes, o
 - **Junk & Runtime Filtering**: Ignores background utilities such as Wallpaper Engine, SteamVR, and Steam Linux Runtime by default.
 - **Minimum Duration Filter**: Configurable threshold (e.g., 60 seconds) prevents accidental misclicks or quick benchmark runs from spamming your diary.
 
-### 🕹️ Official Nintendo Switch Cloud Sync
-- **Server-Side Tracking**: Syncs directly from Nintendo’s cloud servers. Play on your Switch docked or handheld anywhere; playtime updates on your PC later.
-- **Daily / Monthly Calendar Summaries**: Connects via the official Nintendo Switch Parental Controls API to fetch exact per-game minutes played for any day. *(Note: You can leave parental restriction levels set to "None" so your console is completely unrestricted).*
-- **All-Time Play History**: Connects via the Nintendo Store / eShop API to retrieve complete gameplay histories dating back to 2017 (including first-played date, total days active, and total hours).
-- **Scheduled Background Sync**: Periodically polls Nintendo’s servers (default: every 30 minutes) and syncs new sessions without requiring manual clicks.
-- **Switch 2 Ready**: Compatible with current Nintendo Switch titles and forward-compatible title IDs.
+### 🕹️ Official Nintendo Switch & Switch 2 Cloud Sync
+- **Server-Side Tracking (No Parental Controls Required)**: Syncs directly from Nintendo's official **Nintendo Store Game History** cloud API (`com.nintendo.znej`). Every Nintendo Account tracks play history automatically—no Parental Controls app or console restrictions needed.
+- **Exact Day-by-Day All-Time Breakdown (2017–Present)**: Queries both recent play activity (`/api/v2.0/users/me/play_histories`) and per-game daily breakdowns (`/api/v2.0/users/me/play_histories/game_titles/{titleId}`) with pagination to import every individual calendar day and exact minutes played across all Switch 1 and Switch 2 titles.
+- **Smart Incremental Reconciliation**: Automatically compares each game's `totalPlayedDays` and `totalPlayedMinutes` against local sessions so the first sync imports your entire lifetime day-by-day history and subsequent syncs only fetch games with new activity.
+- **Once-a-Day Scheduled Background Sync**: Checks Nintendo's servers once per calendar day in the background and syncs new daily sessions automatically.
+- **Non-Game App Filtering**: Automatically ignores media apps (such as YouTube, Hulu, Crunchyroll, Twitch) and Nintendo Classics emulator hubs.
 
 ### 📖 Non-Destructive Backloggd Diary Sync
 - **Preserves Your Data**: Backloggd AutoSync safely logs playtime and dates under `sync_sessions` without altering your pre-existing star ratings, reviews, played statuses, or custom journal notes.
@@ -118,27 +118,14 @@ Once your Backloggd account is connected, Steam tracking is fully automatic:
 
 ### 3. Nintendo Switch & Switch 2 Cloud Sync
 
-Nintendo Switch play history can be imported in two ways:
+Backloggd AutoSync connects directly to your Nintendo Account's official **Nintendo Store Game History** (covering all Switch 1 & Switch 2 games from 2017 to present with exact day-by-day breakdowns, with **no Parental Controls setup required**):
 
-#### A. Daily / Monthly Tracking (Parental Controls API)
-Provides exact daily minutes per game:
-
-1. Link your Switch console to the free **Nintendo Switch Parental Controls** mobile app ([iOS](https://apps.apple.com/app/nintendo-switch-parental-controls/id1190074407) / [Android](https://play.google.com/store/apps/details?id=com.nintendo.znma)).
-   > *Tip: In the app, you can set the Restriction Level to **None**. The app will simply act as a daily playtime logger without enforcing any restrictions.*
-2. In Backloggd AutoSync, go to the **Nintendo Switch Sync** tab.
-3. Click **1a. Open Daily/Monthly Login (Parental App)**. A browser window will open to the official Nintendo login page.
-4. Sign in to your Nintendo Account.
-5. When presented with the red button that says **"Select this person"** (or your username):
-   - **Right-click** the button &rarr; select **Copy link address**.
-6. Paste the copied link into the **Step 2** text box in Backloggd AutoSync and click **2. Connect Nintendo Account**.
-7. Click **🔄 Fetch & Sync Recent Playtime** to import recent daily play sessions. You can adjust the **Recent days** slider (1–60 days).
-
-#### B. All-Time History Tracking (Nintendo Store API)
-Retrieves your full play history from 2017 to present:
-
-1. In the **Nintendo Switch Sync** tab, click **1b. Open Nintendo Store Login (All-Time History)**.
-2. Sign in, right-click the red confirmation button &rarr; **Copy link address**, and paste it into the application.
-3. Click **📚 Sync Entire Available History (All Months/Years)**.
+1. In Backloggd AutoSync, open the **Nintendo Switch Sync** tab.
+2. Click **1. Open Nintendo Account Sign-In**. A browser window will open to the official Nintendo Account sign-in page.
+3. Sign in to your Nintendo Account.
+4. On the confirmation page, **right-click** the red **"Select this person"** button &rarr; choose **Copy link address**.
+5. Paste the copied `npf...://auth#...` link into the **Step 2** text box and click **2. Connect Nintendo Account**.
+6. Backloggd AutoSync will immediately fetch and sync your day-by-day play history across all Switch 1 & Switch 2 games, and you can click **🔄 Sync Nintendo Switch Playtime Now** anytime or leave **once-a-day automatic background sync** enabled.
 
 ---
 
@@ -174,9 +161,9 @@ Retrieves your full play history from 2017 to present:
 - **Live Search & Autocomplete**: Search Backloggd titles with instant cover/release year suggestions to override or manually link any Steam AppID or Switch Application ID.
 
 ### Nintendo Switch Sync
-- Authenticate Parental Controls and Nintendo Store session tokens.
-- Select sync lookback window (1 to 60 days) or run full lifetime library synchronization.
-- Toggle **Automatic 30-minute background sync**.
+- Connect your Nintendo Account in one step using the Nintendo Store Game History OAuth flow.
+- Click **🔄 Sync Nintendo Switch Playtime Now** to sync recent and all-time day-by-day play history across all Switch 1 & Switch 2 games.
+- Toggle **Automatic once-a-day background sync**.
 
 ### Account & Settings
 - **Backloggd Cookie Verification**: Validate session health and view logged-in username and User ID.
@@ -223,7 +210,7 @@ Backloggd AutoSync is designed with **zero external dependencies**. It compiles 
 
 1. Clone or download this repository:
    ```powershell
-   git clone https://github.com/your-username/backloggd-autosync.git
+   git clone https://github.com/vceolin/backloggd-autosync.git
    cd backloggd-autosync
    ```
 
@@ -343,7 +330,7 @@ Backloggd cookies can expire after prolonged periods or if you clicked "Log Out"
 <details>
 <summary><strong>3. How does Nintendo Switch sync work if my PC is asleep or turned off?</strong></summary>
 
-Nintendo Switch playtime is recorded on Nintendo's servers, not your PC. You can play your Switch anywhere in the world. As long as your console connects to Wi-Fi, Nintendo records your daily summary. The next time you open Backloggd AutoSync (or when its 30-minute background auto-sync runs), it queries Nintendo's servers and syncs all missed days to your Backloggd diary.
+Nintendo Switch playtime is recorded on Nintendo's servers, not your PC. You can play your Switch 1 or Switch 2 anywhere in the world. As long as your console connects to Wi-Fi, Nintendo records your daily play history per game. The next time you open Backloggd AutoSync (or when its once-a-day background auto-sync runs), it queries Nintendo's servers and syncs all missed days to your Backloggd diary.
 </details>
 
 <details>
