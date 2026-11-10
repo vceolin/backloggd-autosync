@@ -146,7 +146,10 @@ namespace BackloggdAutoSync
                         }
                     }
 
-                    int defaultPlatformId = string.Equals(entry.Platform, "Switch", StringComparison.OrdinalIgnoreCase) ? 130 : 6;
+                    bool isSwitch = string.Equals(entry.Platform, "Switch", StringComparison.OrdinalIgnoreCase);
+                    int defaultPlatformId = isSwitch
+                        ? NintendoSwitchClient.GetSwitchPlatformId(entry.SwitchApplicationId, entry.GameTitle)
+                        : 6;
                     SyncResult res = BackloggdClient.SyncSession(
                         entry.BackloggdGameId,
                         entry.DurationSeconds,
@@ -538,7 +541,19 @@ namespace BackloggdAutoSync
                     try
                     {
                         bool isSwitch = string.Equals(first.Platform, "Switch", StringComparison.OrdinalIgnoreCase);
-                        int defaultPlatformId = isSwitch ? 130 : 6;
+                        int defaultPlatformId = 6;
+                        if (isSwitch)
+                        {
+                            defaultPlatformId = NintendoSwitchClient.GetSwitchPlatformId(first.SwitchApplicationId, first.GameTitle);
+                            foreach (var s in targetGroup)
+                            {
+                                if (NintendoSwitchClient.IsSwitch2Game(s.SwitchApplicationId, s.GameTitle))
+                                {
+                                    defaultPlatformId = 508;
+                                    break;
+                                }
+                            }
+                        }
 
                         // For Switch games (SetExactDayPlaytime), pass all local daily sessions for this gameId so Backloggd reconciliation has the full calendar
                         List<SessionEntry> entriesToReconcile = targetGroup;
@@ -727,12 +742,12 @@ namespace BackloggdAutoSync
                 string cid = "nx_" + Math.Abs(swId);
 
                 CollectionEntry entry;
+                var map = mappings.Find(m => m.AppId == swId);
+                string combinedSwitchTitle = ((rec.Title ?? "") + " " + (map != null ? map.BackloggdTitle : "")).Trim();
+                int expectedSwitchPlat = NintendoSwitchClient.GetSwitchPlatformId(rec.ApplicationId, combinedSwitchTitle);
+
                 if (!byId.TryGetValue(cid, out entry) && !byAppId.TryGetValue(swId, out entry))
                 {
-                    var map = mappings.Find(m => m.AppId == swId);
-                    string checkTitle = ((rec.Title ?? "") + " " + (map != null ? map.BackloggdTitle : "")).ToLowerInvariant();
-                    int defaultPlat = (checkTitle.Contains("switch 2") || checkTitle.Contains("mario kart world") || checkTitle.Contains("donkey kong bananza")) ? 508 : 130;
-
                     entry = new CollectionEntry
                     {
                         Id = cid,
@@ -741,7 +756,7 @@ namespace BackloggdAutoSync
                         SwitchApplicationId = rec.ApplicationId ?? "",
                         LocalTitle = rec.Title ?? "",
                         IsInstalled = true,
-                        PlatformId = defaultPlat,
+                        PlatformId = expectedSwitchPlat,
                         OwnershipId = 1, // Digital by default; user can switch to Physical (0)
                         StorefrontId = 8 // Nintendo eShop
                     };
@@ -756,7 +771,15 @@ namespace BackloggdAutoSync
                     entry.AppId = swId;
                     if (!string.IsNullOrEmpty(rec.ApplicationId)) entry.SwitchApplicationId = rec.ApplicationId;
                     if (!string.IsNullOrEmpty(rec.Title)) entry.LocalTitle = rec.Title;
-                    if (entry.PlatformId != 130 && entry.PlatformId != 508) entry.PlatformId = 130;
+                    if (entry.PlatformId != 130 && entry.PlatformId != 508)
+                    {
+                        entry.PlatformId = expectedSwitchPlat;
+                    }
+                    else if (expectedSwitchPlat == 508 && entry.PlatformId == 130)
+                    {
+                        entry.PlatformId = 508;
+                        entry.Synced = false;
+                    }
                 }
 
                 var swMap = mappings.Find(m => m.AppId == swId);

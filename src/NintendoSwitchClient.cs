@@ -662,6 +662,47 @@ namespace BackloggdAutoSync
             }
         }
 
+        public static bool IsSwitch2Game(string switchApplicationId, string title)
+        {
+            if (!string.IsNullOrEmpty(switchApplicationId))
+            {
+                string id = switchApplicationId.Trim();
+                // Native Nintendo Switch 2 applications use the 0400... titleId prefix (Switch 1 uses 0100...)
+                if (id.StartsWith("0400", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(title))
+            {
+                string t = title.Trim();
+                if (t.IndexOf("Switch 2", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    t.IndexOf("Mario Kart World", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    t.IndexOf("Donkey Kong Bananza", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    t.IndexOf("Kirby Air Riders", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    string.Equals(t, "Orbitals", StringComparison.OrdinalIgnoreCase) ||
+                    t.IndexOf("Pokopia", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    t.IndexOf("Splatoon Raiders", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    t.IndexOf("Welcome Tour", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static int GetSwitchPlatformId(string switchApplicationId, string title)
+        {
+            return IsSwitch2Game(switchApplicationId, title) ? 508 : 130;
+        }
+
+        public static string GetSwitchPlatformName(string switchApplicationId, string title)
+        {
+            return IsSwitch2Game(switchApplicationId, title) ? "Nintendo Switch 2" : "Nintendo Switch";
+        }
+
         public static bool IsNonGameSwitchApp(string switchApplicationId, string title)
         {
             if (!string.IsNullOrEmpty(switchApplicationId))

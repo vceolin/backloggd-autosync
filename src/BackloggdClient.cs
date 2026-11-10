@@ -517,7 +517,7 @@ namespace BackloggdAutoSync
                 if (pt.ContainsKey("title") && pt["title"] != null)
                     status.PlaythroughTitle = Convert.ToString(pt["title"]);
                 if (pt.ContainsKey("platform") && pt["platform"] != null)
-                    status.PlatformId = ToIntSafe(pt["platform"], 6);
+                    status.PlatformId = ToIntSafe(pt["platform"], 0);
                 if (pt.ContainsKey("rating") && pt["rating"] != null)
                     status.Rating = ToIntSafe(pt["rating"], 0);
                 if (pt.ContainsKey("review") && pt["review"] != null)
@@ -610,6 +610,50 @@ namespace BackloggdAutoSync
             return sb.ToString();
         }
 
+        public static string GetDefaultPlaythroughTitle(int platformId)
+        {
+            if (platformId == 508) return "Nintendo Switch 2";
+            if (platformId == 130) return "Nintendo Switch";
+            return "Windows PC";
+        }
+
+        private static void ResolvePlaythroughPlatformAndTitle(GameLogStatus logStatus, bool isNewLog, int defaultPlatformId, out int platformId, out string playthroughTitle)
+        {
+            string defaultPtTitle = GetDefaultPlaythroughTitle(defaultPlatformId);
+            if (isNewLog || logStatus == null || logStatus.PlatformId <= 0)
+            {
+                platformId = defaultPlatformId;
+            }
+            else if (defaultPlatformId == 508 && (logStatus.PlatformId == 130 || logStatus.PlatformId == 6))
+            {
+                platformId = 508;
+            }
+            else if (defaultPlatformId == 130 && logStatus.PlatformId == 6)
+            {
+                platformId = 130;
+            }
+            else
+            {
+                platformId = logStatus.PlatformId;
+            }
+
+            string existingTitle = (!isNewLog && logStatus != null && !string.IsNullOrEmpty(logStatus.PlaythroughTitle))
+                ? logStatus.PlaythroughTitle.Trim()
+                : "";
+
+            if (string.IsNullOrEmpty(existingTitle) ||
+                string.Equals(existingTitle, "Log", StringComparison.OrdinalIgnoreCase) ||
+                (platformId == 508 && (string.Equals(existingTitle, "Nintendo Switch", StringComparison.OrdinalIgnoreCase) || string.Equals(existingTitle, "Windows PC", StringComparison.OrdinalIgnoreCase))) ||
+                (platformId == 130 && string.Equals(existingTitle, "Windows PC", StringComparison.OrdinalIgnoreCase)))
+            {
+                playthroughTitle = GetDefaultPlaythroughTitle(platformId);
+            }
+            else
+            {
+                playthroughTitle = existingTitle;
+            }
+        }
+
         public static SyncResult SyncSession(string gameId, int durationSec, string dateStr, AppSettings settings, string note = null, int defaultPlatformId = 6, bool setExactDayTotal = false)
         {
             var result = new SyncResult
@@ -631,21 +675,20 @@ namespace BackloggdAutoSync
 
             GameLogStatus logStatus = GetGameLogStatus(gameId, settings);
 
-            string defaultPtTitle = defaultPlatformId == 130 ? "Nintendo Switch" : "Windows PC";
+            bool isNewLog = !(logStatus.IsLogged && logStatus.PlaythroughId.HasValue);
             int playthroughId;
             string playthroughTitle;
-            int platformId = (logStatus.IsLogged && logStatus.PlatformId > 0) ? logStatus.PlatformId : defaultPlatformId;
+            int platformId;
+            ResolvePlaythroughPlatformAndTitle(logStatus, isNewLog, defaultPlatformId, out platformId, out playthroughTitle);
             int rating = logStatus.Rating;
             List<PlayDateEntry> existingDates = new List<PlayDateEntry>(logStatus.PlayDates);
-            bool isNewLog = false;
             bool accumulated = false;
             int finalDayHours = addHours;
             int finalDayMins = addMins;
 
-            if (logStatus.IsLogged && logStatus.PlaythroughId.HasValue)
+            if (!isNewLog)
             {
                 playthroughId = logStatus.PlaythroughId.Value;
-                playthroughTitle = !string.IsNullOrEmpty(logStatus.PlaythroughTitle) ? logStatus.PlaythroughTitle : defaultPtTitle;
 
                 int existingIdx = existingDates.FindIndex(d => d.range_start_date == dateStr);
                 if (existingIdx >= 0)
@@ -687,9 +730,7 @@ namespace BackloggdAutoSync
             }
             else
             {
-                isNewLog = true;
                 playthroughId = -1;
-                playthroughTitle = defaultPtTitle;
                 existingDates.Add(new PlayDateEntry
                 {
                     id = -1,
@@ -832,11 +873,11 @@ namespace BackloggdAutoSync
             }
 
             GameLogStatus logStatus = GetGameLogStatus(gameId, settings);
-            string defaultPtTitle = defaultPlatformId == 130 ? "Nintendo Switch" : "Windows PC";
             bool isNewLog = !(logStatus.IsLogged && logStatus.PlaythroughId.HasValue);
             int playthroughId = isNewLog ? -1 : logStatus.PlaythroughId.Value;
-            string playthroughTitle = (!isNewLog && !string.IsNullOrEmpty(logStatus.PlaythroughTitle)) ? logStatus.PlaythroughTitle : defaultPtTitle;
-            int platformId = (!isNewLog && logStatus.PlatformId > 0) ? logStatus.PlatformId : defaultPlatformId;
+            string playthroughTitle;
+            int platformId;
+            ResolvePlaythroughPlatformAndTitle(logStatus, isNewLog, defaultPlatformId, out platformId, out playthroughTitle);
             int rating = logStatus.Rating;
             List<PlayDateEntry> existingDates = new List<PlayDateEntry>(logStatus.PlayDates);
 
@@ -1004,7 +1045,10 @@ namespace BackloggdAutoSync
             int ptHours = totalMinsAll / 60;
             int ptMins = totalMinsAll % 60;
 
-            if (editedDates.Count == 0 && deletedDateIds.Count == 0 && !isNewLog && (logStatus.HoursPlayed * 60 + logStatus.MinsPlayed) == totalMinsAll)
+            if (editedDates.Count == 0 && deletedDateIds.Count == 0 && !isNewLog &&
+                (logStatus.HoursPlayed * 60 + logStatus.MinsPlayed) == totalMinsAll &&
+                logStatus.PlatformId == platformId &&
+                string.Equals(logStatus.PlaythroughTitle, playthroughTitle, StringComparison.Ordinal))
             {
                 result.Success = true;
                 result.FinalDayHours = ptHours;

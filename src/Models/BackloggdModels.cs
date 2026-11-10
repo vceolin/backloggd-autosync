@@ -69,8 +69,8 @@ namespace BackloggdAutoSync
 
         public GameLogStatus()
         {
-            PlaythroughTitle = "Windows PC";
-            PlatformId = 6; // Windows PC
+            PlaythroughTitle = "";
+            PlatformId = 0;
             Status = "playing";
             IsPlaying = true;
             PlayDates = new List<PlayDateEntry>();

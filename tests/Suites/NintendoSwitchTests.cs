@@ -58,5 +58,26 @@ namespace BackloggdAutoSync.Tests
             Assert.AreEqual(NintendoSwitchClient.StoreClientId, storeChallenge.ClientId);
             Assert.Contains("client_id=" + NintendoSwitchClient.StoreClientId, storeChallenge.LoginUrl);
         }
+
+        [Test]
+        public void Should_Differentiate_Switch_1_And_Switch_2_Games()
+        {
+            // Native Switch 2 titles (0400... prefix) -> PlatformId 508 ("Nintendo Switch 2")
+            Assert.IsTrue(NintendoSwitchClient.IsSwitch2Game("040032b023ca4000", "Orbitals"));
+            Assert.AreEqual(508, NintendoSwitchClient.GetSwitchPlatformId("040032b023ca4000", "Orbitals"));
+            Assert.AreEqual("Nintendo Switch 2", NintendoSwitchClient.GetSwitchPlatformName("040032b023ca4000", "Orbitals"));
+
+            Assert.IsTrue(NintendoSwitchClient.IsSwitch2Game("040000101f5b8000", "Mario Kart World"));
+            Assert.AreEqual(508, NintendoSwitchClient.GetSwitchPlatformId("040000101f5b8000", "Mario Kart World"));
+
+            // Switch 1 title with Switch 2 Edition upgrade -> PlatformId 508 ("Nintendo Switch 2")
+            Assert.IsTrue(NintendoSwitchClient.IsSwitch2Game("01007ef00011e000", "The Legend of Zelda: Breath of the Wild – Nintendo Switch 2 Edition"));
+            Assert.AreEqual(508, NintendoSwitchClient.GetSwitchPlatformId("01007ef00011e000", "The Legend of Zelda: Breath of the Wild – Nintendo Switch 2 Edition"));
+
+            // Native Switch 1 titles (0100... prefix) -> PlatformId 130 ("Nintendo Switch")
+            Assert.IsFalse(NintendoSwitchClient.IsSwitch2Game("0100000000010000", "Super Mario Odyssey"));
+            Assert.AreEqual(130, NintendoSwitchClient.GetSwitchPlatformId("0100000000010000", "Super Mario Odyssey"));
+            Assert.AreEqual("Nintendo Switch", NintendoSwitchClient.GetSwitchPlatformName("0100000000010000", "Super Mario Odyssey"));
+        }
     }
 }

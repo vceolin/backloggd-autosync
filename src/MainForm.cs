@@ -938,7 +938,9 @@ namespace BackloggdAutoSync
                 string sourceState;
                 if (isSwitchEntry)
                 {
-                    sourceState = "Nintendo Switch";
+                    sourceState = (c.PlatformId == 508 || NintendoSwitchClient.IsSwitch2Game(c.SwitchApplicationId, c.LocalTitle))
+                        ? "Nintendo Switch 2"
+                        : "Nintendo Switch";
                 }
                 else
                 {
@@ -1868,7 +1870,7 @@ namespace BackloggdAutoSync
                 item.Tag = s;
                 item.SubItems.Add(s.GameTitle ?? ("App " + s.AppId));
                 string platText = string.Equals(s.Platform, "Switch", StringComparison.OrdinalIgnoreCase)
-                    ? "Nintendo Switch"
+                    ? NintendoSwitchClient.GetSwitchPlatformName(s.SwitchApplicationId, s.GameTitle)
                     : (s.AppId > 0 ? ("Steam (" + s.AppId + ")") : "Manual");
                 item.SubItems.Add(platText);
                 item.SubItems.Add(FormatDuration(s.DurationSeconds));
