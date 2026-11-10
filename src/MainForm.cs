@@ -27,14 +27,10 @@ namespace BackloggdAutoSync
         private AppSettings _settings;
         private readonly SteamTracker _tracker;
         private readonly System.Windows.Forms.Timer _pollTimer;
-        private readonly System.Windows.Forms.Timer _mappingDebounceTimer;
         private NotifyIcon _trayIcon;
         private ContextMenuStrip _trayMenu;
         private ToolStripMenuItem _trayStatusItem;
         private bool _allowClose = false;
-        private bool _suppressSearchTextChanged = false;
-        private bool _suppressMappingSelectionChanged = false;
-        private int _searchRequestSeq = 0;
 
         private class ListViewStateSnapshot
         {
@@ -161,17 +157,6 @@ namespace BackloggdAutoSync
         private ListView _lvCollection;
         private bool _collectionLoadedOnce = false;
 
-        // Tab 3: Game Mappings (Auto-Suggest UI)
-        private ComboBox _cmbInstalledGames;
-        private Button _btnAutoMatchAllInstalled;
-        private TextBox _txtMapAppId;
-        private TextBox _txtMapSearchQuery;
-        private Label _lblSuggestionStatus;
-        private ListBox _lstSuggestions;
-        private Button _btnSaveMapping;
-        private Button _btnDeleteMapping;
-        private ListView _lvMappings;
-
         // Tab 3: Nintendo Switch Sync
         private NintendoLoginChallenge _nintendoChallenge;
         private Button _btnNintendoOpenLogin;
@@ -209,9 +194,6 @@ namespace BackloggdAutoSync
             _settings = DataStore.LoadSettings();
             _tracker = new SteamTracker();
 
-            _mappingDebounceTimer = new System.Windows.Forms.Timer { Interval = 380 };
-            _mappingDebounceTimer.Tick += MappingDebounceTimer_Tick;
-
             InitializeComponent();
             SetupTrayIcon();
 
@@ -224,7 +206,11 @@ namespace BackloggdAutoSync
             _tracker.RecoverCrashCheckpoint(_settings);
 
             RefreshSessionsList();
-            RefreshMappingsList();
+            if (DataStore.LoadCollection().Count > 0)
+            {
+                _collectionLoadedOnce = true;
+                RefreshCollectionList();
+            }
             UpdateAccountBadge();
 
             _pollTimer = new System.Windows.Forms.Timer();
@@ -472,19 +458,16 @@ namespace BackloggdAutoSync
 
             var tabSessions = new TabPage("Daily Diary & Sessions") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
             var tabCollection = new TabPage("Collection / Library") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
-            var tabMappings = new TabPage("Game Mappings (Auto-Suggest)") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
             var tabSwitch = new TabPage("Nintendo Switch Sync") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
             var tabSettings = new TabPage("Backloggd Account & Settings") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
 
             BuildSessionsTab(tabSessions);
             BuildCollectionTab(tabCollection);
-            BuildMappingsTab(tabMappings);
             BuildNintendoSwitchTab(tabSwitch);
             BuildSettingsTab(tabSettings);
 
             _tabControl.TabPages.Add(tabSessions);
             _tabControl.TabPages.Add(tabCollection);
-            _tabControl.TabPages.Add(tabMappings);
             _tabControl.TabPages.Add(tabSwitch);
             _tabControl.TabPages.Add(tabSettings);
             _tabControl.SelectedIndexChanged += (s, e) =>
@@ -493,10 +476,6 @@ namespace BackloggdAutoSync
                 {
                     _collectionLoadedOnce = true;
                     ScanAndRefreshCollection(true);
-                }
-                else if (_tabControl.SelectedTab == tabMappings && _cmbInstalledGames.Items.Count == 0)
-                {
-                    PopulateInstalledSteamGamesDropdown();
                 }
             };
 
@@ -814,12 +793,12 @@ namespace BackloggdAutoSync
                 if (c.Synced) totalSynced++;
 
                 // Apply filter dropdown
-                if (filterMode == "Steam Only (All Owned)" && !string.Equals(c.Source, "Steam", StringComparison.OrdinalIgnoreCase)) continue;
-                if (filterMode == "Steam Installed Only" && (!string.Equals(c.Source, "Steam", StringComparison.OrdinalIgnoreCase) || !c.IsInstalled)) continue;
-                if (filterMode == "Nintendo Switch Only" && !isSwitchEntry) continue;
-                if (filterMode == "Unsynced Only" && (c.Synced || c.Excluded)) continue;
-                if (filterMode == "Unmapped Only" && !string.IsNullOrEmpty(c.BackloggdGameId)) continue;
-                if (filterMode == "Synced on Backloggd" && !c.Synced) continue;
+                if (filterMode == "Steam Games (All Owned)" && !string.Equals(c.Source, "Steam", StringComparison.OrdinalIgnoreCase)) continue;
+                if (filterMode == "Steam Games (Installed Only)" && (!string.Equals(c.Source, "Steam", StringComparison.OrdinalIgnoreCase) || !c.IsInstalled)) continue;
+                if (filterMode == "Nintendo Switch Games Only" && !isSwitchEntry) continue;
+                if (filterMode == "Mapped & Ready to Sync" && (c.Synced || c.Excluded || string.IsNullOrEmpty(c.BackloggdGameId))) continue;
+                if (filterMode == "Synced on Backloggd Library" && !c.Synced) continue;
+                if (filterMode == "Unmapped Games Only" && !string.IsNullOrEmpty(c.BackloggdGameId)) continue;
 
                 // Apply search text (diacritic-insensitive so both "pokemon" and "pokémon" match)
                 if (!string.IsNullOrEmpty(search))
@@ -988,7 +967,7 @@ namespace BackloggdAutoSync
             {
                 MessageBox.Show("Please connect your _backloggd_session cookie in the Settings tab first!",
                     "Cookie Needed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _tabControl.SelectedIndex = 4;
+                _tabControl.SelectedIndex = 3;
                 return;
             }
 
@@ -1125,7 +1104,7 @@ namespace BackloggdAutoSync
             {
                 MessageBox.Show("Please connect your _backloggd_session cookie in the Settings tab first!",
                     "Cookie Needed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _tabControl.SelectedIndex = 4;
+                _tabControl.SelectedIndex = 3;
                 return;
             }
 
@@ -1172,132 +1151,6 @@ namespace BackloggdAutoSync
                     }));
                 }
             });
-        }
-
-        private void BuildMappingsTab(TabPage page)
-        {
-            var editorCard = new Panel
-            {
-                Dock = DockStyle.Top,
-                Height = 225,
-                BackColor = BgCard,
-                Padding = new Padding(14)
-            };
-
-            var lblStep1 = new Label
-            {
-                Text = "1. Pick an installed Steam game (or auto-match your entire library in 1 click):",
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-                ForeColor = TextLight,
-                AutoSize = true,
-                Location = new Point(14, 10)
-            };
-
-            _cmbInstalledGames = new ComboBox
-            {
-                Location = new Point(14, 35),
-                Width = 430,
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = BgInput,
-                ForeColor = TextLight
-            };
-            _cmbInstalledGames.SelectedIndexChanged += CmbInstalledGames_SelectedIndexChanged;
-
-            var lblAppId = new Label { Text = "AppID:", Location = new Point(458, 38), AutoSize = true, ForeColor = TextMuted };
-            _txtMapAppId = new TextBox
-            {
-                Location = new Point(508, 35),
-                Width = 85,
-                BackColor = BgInput,
-                ForeColor = TextLight,
-                BorderStyle = BorderStyle.FixedSingle
-            };
-
-            _btnAutoMatchAllInstalled = CreateStyledButton("✨ Auto-Match All Installed Games", AccentBlue, 245, 29);
-            _btnAutoMatchAllInstalled.Location = new Point(610, 33);
-            _btnAutoMatchAllInstalled.Click += BtnAutoMatchAllInstalled_Click;
-
-            var lblStep2 = new Label
-            {
-                Text = "2. Live Backloggd Auto-Suggest (type to search — suggestions update automatically):",
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-                ForeColor = TextLight,
-                AutoSize = true,
-                Location = new Point(14, 72)
-            };
-
-            _txtMapSearchQuery = new TextBox
-            {
-                Location = new Point(14, 96),
-                Width = 430,
-                BackColor = BgInput,
-                ForeColor = TextLight,
-                BorderStyle = BorderStyle.FixedSingle
-            };
-            _txtMapSearchQuery.TextChanged += TxtMapSearchQuery_TextChanged;
-
-            _lblSuggestionStatus = new Label
-            {
-                Text = "Select a Steam game above or start typing to see Backloggd suggestions...",
-                ForeColor = TextMuted,
-                AutoSize = true,
-                Location = new Point(458, 98)
-            };
-
-            _lstSuggestions = new ListBox
-            {
-                Location = new Point(14, 126),
-                Size = new Size(580, 84),
-                BackColor = BgInput,
-                ForeColor = TextLight,
-                BorderStyle = BorderStyle.FixedSingle
-            };
-            _lstSuggestions.DoubleClick += BtnSaveMapping_Click;
-
-            _btnSaveMapping = CreateStyledButton("✓ Use Selected Suggestion", AccentPink, 200, 36);
-            _btnSaveMapping.Location = new Point(610, 126);
-            _btnSaveMapping.Click += BtnSaveMapping_Click;
-
-            _btnDeleteMapping = CreateStyledButton("Remove Selected Mapping", BgInput, 200, 32);
-            _btnDeleteMapping.Location = new Point(610, 174);
-            _btnDeleteMapping.Click += BtnDeleteMapping_Click;
-
-            editorCard.Controls.AddRange(new Control[]
-            {
-                lblStep1, _cmbInstalledGames, lblAppId, _txtMapAppId, _btnAutoMatchAllInstalled,
-                lblStep2, _txtMapSearchQuery, _lblSuggestionStatus, _lstSuggestions,
-                _btnSaveMapping, _btnDeleteMapping
-            });
-
-            _lvMappings = new ListView
-            {
-                Dock = DockStyle.Fill,
-                View = View.Details,
-                FullRowSelect = true,
-                BackColor = BgCard,
-                ForeColor = TextLight,
-                BorderStyle = BorderStyle.FixedSingle
-            };
-            _lvMappings.Columns.Add("Steam AppID", 100);
-            _lvMappings.Columns.Add("Steam Title", 260);
-            _lvMappings.Columns.Add("Backloggd Title", 260);
-            _lvMappings.Columns.Add("Backloggd ID", 105);
-            _lvMappings.Columns.Add("Match Type", 120);
-            _lvMappings.SelectedIndexChanged += (s, e) =>
-            {
-                if (_suppressMappingSelectionChanged) return;
-                if (_lvMappings.SelectedItems.Count > 0)
-                {
-                    var item = _lvMappings.SelectedItems[0];
-                    _txtMapAppId.Text = item.SubItems[0].Text;
-                    TriggerLiveSuggest(item.SubItems[1].Text);
-                }
-            };
-
-            var spacer = new Panel { Dock = DockStyle.Top, Height = 10, BackColor = BgDark };
-            page.Controls.Add(_lvMappings);
-            page.Controls.Add(spacer);
-            page.Controls.Add(editorCard);
         }
 
         private void BuildNintendoSwitchTab(TabPage page)
@@ -1694,196 +1547,6 @@ namespace BackloggdAutoSync
             return btn;
         }
 
-        private void PopulateInstalledSteamGamesDropdown()
-        {
-            _cmbInstalledGames.Items.Clear();
-            var ownedGames = SteamLibrary.GetAllOwnedSteamGames(_settings.IgnoredAppIds, false);
-            var seenIds = new HashSet<int>();
-
-            foreach (var g in ownedGames)
-            {
-                _cmbInstalledGames.Items.Add(g);
-                seenIds.Add(g.AppId);
-            }
-
-            // Also include any games from past sessions that aren't in the list yet
-            foreach (var s in DataStore.LoadSessions())
-            {
-                if (s.AppId > 0 && !seenIds.Contains(s.AppId))
-                {
-                    seenIds.Add(s.AppId);
-                    _cmbInstalledGames.Items.Add(new InstalledSteamGame
-                    {
-                        AppId = s.AppId,
-                        Title = s.GameTitle ?? ("Steam App " + s.AppId)
-                    });
-                }
-            }
-
-            if (_cmbInstalledGames.Items.Count > 0)
-            {
-                _cmbInstalledGames.SelectedIndex = 0;
-            }
-        }
-
-        private void CmbInstalledGames_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            var selected = _cmbInstalledGames.SelectedItem as InstalledSteamGame;
-            if (selected == null) return;
-
-            _txtMapAppId.Text = selected.AppId.ToString();
-            TriggerLiveSuggest(BackloggdClient.CleanGameTitle(selected.Title));
-        }
-
-        private void TriggerLiveSuggest(string query)
-        {
-            _suppressSearchTextChanged = true;
-            _txtMapSearchQuery.Text = query ?? "";
-            _suppressSearchTextChanged = false;
-
-            _mappingDebounceTimer.Stop();
-            _mappingDebounceTimer.Start();
-        }
-
-        private void TxtMapSearchQuery_TextChanged(object sender, EventArgs e)
-        {
-            if (_suppressSearchTextChanged) return;
-            _mappingDebounceTimer.Stop();
-            _mappingDebounceTimer.Start();
-        }
-
-        private void MappingDebounceTimer_Tick(object sender, EventArgs e)
-        {
-            _mappingDebounceTimer.Stop();
-            string query = _txtMapSearchQuery.Text.Trim();
-            if (query.Length < 2)
-            {
-                _lstSuggestions.Items.Clear();
-                _lblSuggestionStatus.Text = "Type at least 2 characters to auto-suggest Backloggd games...";
-                return;
-            }
-
-            int reqId = Interlocked.Increment(ref _searchRequestSeq);
-            _lblSuggestionStatus.Text = "Searching Backloggd for '" + query + "'...";
-            _lblSuggestionStatus.ForeColor = TextMuted;
-
-            ThreadPool.QueueUserWorkItem(_ =>
-            {
-                try
-                {
-                    var results = BackloggdClient.SearchGame(query, _settings);
-                    BeginInvoke(new Action(() =>
-                    {
-                        if (reqId != _searchRequestSeq) return;
-                        _lstSuggestions.Items.Clear();
-                        foreach (var r in results)
-                        {
-                            _lstSuggestions.Items.Add(r);
-                        }
-
-                        if (_lstSuggestions.Items.Count > 0)
-                        {
-                            var best = BackloggdClient.SelectBestMatch(query, results);
-                            if (best != null && _lstSuggestions.Items.Contains(best))
-                                _lstSuggestions.SelectedItem = best;
-                            else
-                                _lstSuggestions.SelectedIndex = 0;
-
-                            _lblSuggestionStatus.Text = string.Format("Found {0} suggestion(s) — best match pre-selected!", results.Count);
-                            _lblSuggestionStatus.ForeColor = SuccessGreen;
-                        }
-                        else
-                        {
-                            _lblSuggestionStatus.Text = "No Backloggd matches found for '" + query + "'. Try a shorter title.";
-                            _lblSuggestionStatus.ForeColor = WarnOrange;
-                        }
-                    }));
-                }
-                catch (Exception ex)
-                {
-                    BeginInvoke(new Action(() =>
-                    {
-                        if (reqId != _searchRequestSeq) return;
-                        _lblSuggestionStatus.Text = "Auto-suggest error: " + ex.Message;
-                        _lblSuggestionStatus.ForeColor = WarnOrange;
-                    }));
-                }
-            });
-        }
-
-        private void BtnAutoMatchAllInstalled_Click(object sender, EventArgs e)
-        {
-            if (string.IsNullOrWhiteSpace(_settings.SessionCookie))
-            {
-                MessageBox.Show("Please connect your _backloggd_session cookie in the Settings tab first!",
-                    "Cookie Needed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                _tabControl.SelectedIndex = 4;
-                return;
-            }
-
-            var installed = SteamTracker.GetInstalledSteamGames(_settings.IgnoredAppIds);
-            if (installed.Count == 0)
-            {
-                MessageBox.Show("No installed Steam games were detected in your local Steam library folders.",
-                    "Steam Library", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            _btnAutoMatchAllInstalled.Enabled = false;
-            _btnAutoMatchAllInstalled.Text = "Matching installed games...";
-
-            ThreadPool.QueueUserWorkItem(_ =>
-            {
-                int matchedCount = 0;
-                int skippedCount = 0;
-                var mappings = DataStore.LoadMappings();
-
-                foreach (var g in installed)
-                {
-                    if (mappings.Exists(m => m.AppId == g.AppId && !string.IsNullOrEmpty(m.BackloggdGameId)))
-                    {
-                        skippedCount++;
-                        continue;
-                    }
-
-                    try
-                    {
-                        var results = BackloggdClient.SearchGame(g.Title, _settings);
-                        var best = BackloggdClient.SelectBestMatch(g.Title, results) ?? (results.Count > 0 ? results[0] : null);
-                        if (best != null)
-                        {
-                            mappings.RemoveAll(m => m.AppId == g.AppId);
-                            mappings.Add(new GameMapping
-                            {
-                                AppId = g.AppId,
-                                BackloggdGameId = best.GameId,
-                                SteamTitle = g.Title,
-                                BackloggdTitle = best.Title,
-                                ReleaseYear = best.ReleaseYear,
-                                ManualOverride = false,
-                                LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                            });
-                            matchedCount++;
-                        }
-                        Thread.Sleep(250);
-                    }
-                    catch { }
-                }
-
-                DataStore.SaveMappings(mappings);
-
-                BeginInvoke(new Action(() =>
-                {
-                    _btnAutoMatchAllInstalled.Enabled = true;
-                    _btnAutoMatchAllInstalled.Text = "✨ Auto-Match All Installed Games";
-                    RefreshMappingsList();
-                    MessageBox.Show(
-                        string.Format("Scan complete!\r\n• Newly auto-matched: {0} game(s)\r\n• Already mapped: {1} game(s)", matchedCount, skippedCount),
-                        "Auto-Match Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }));
-            });
-        }
-
         private void OnUnmappedGamePromptRequested(SessionEntry entry, string rawTitle, List<GameSearchResult> initialResults)
         {
             if (InvokeRequired)
@@ -2131,32 +1794,6 @@ namespace BackloggdAutoSync
 
         private void RefreshMappingsList()
         {
-            var mappings = DataStore.LoadMappings();
-            Func<ListViewItem, string> getMappingKey = lvi =>
-            {
-                var gm = lvi != null ? lvi.Tag as GameMapping : null;
-                return gm != null ? gm.AppId.ToString() : null;
-            };
-            var stateSnap = CaptureListViewState(_lvMappings, getMappingKey);
-
-            _suppressMappingSelectionChanged = true;
-            _lvMappings.BeginUpdate();
-            _lvMappings.Items.Clear();
-            foreach (var m in mappings)
-            {
-                var item = new ListViewItem(m.AppId.ToString());
-                item.Tag = m;
-                item.SubItems.Add(m.SteamTitle ?? "");
-                item.SubItems.Add(m.BackloggdTitle ?? "");
-                item.SubItems.Add(m.BackloggdGameId ?? "");
-                item.SubItems.Add(m.ManualOverride ? "Manual" : "Auto-Matched");
-                _lvMappings.Items.Add(item);
-            }
-            RestoreListViewState(_lvMappings, stateSnap, getMappingKey);
-            _lvMappings.EndUpdate();
-            RestoreListViewScrollPosition(_lvMappings, stateSnap, getMappingKey);
-            _suppressMappingSelectionChanged = false;
-
             if (_collectionLoadedOnce && _lvCollection != null)
             {
                 RefreshCollectionList();
@@ -2230,73 +1867,6 @@ namespace BackloggdAutoSync
             sessions.RemoveAll(s => s.Id == selected.Id);
             DataStore.SaveSessions(sessions);
             RefreshSessionsList();
-        }
-
-        private void BtnSaveMapping_Click(object sender, EventArgs e)
-        {
-            int appId;
-            if (!int.TryParse(_txtMapAppId.Text.Trim(), out appId) || appId <= 0)
-            {
-                MessageBox.Show("Please select an installed Steam game from the dropdown (or enter its AppID).", "Select Steam Game", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            var selectedResult = _lstSuggestions.SelectedItem as GameSearchResult;
-            if (selectedResult == null)
-            {
-                MessageBox.Show("Please select a Backloggd game from the auto-suggestions list.", "Select Suggestion", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            var mappings = DataStore.LoadMappings();
-            mappings.RemoveAll(m => m.AppId == appId);
-            mappings.Add(new GameMapping
-            {
-                AppId = appId,
-                BackloggdGameId = selectedResult.GameId,
-                SteamTitle = _tracker.ResolveSteamGameTitle(appId),
-                BackloggdTitle = selectedResult.Title,
-                ReleaseYear = selectedResult.ReleaseYear,
-                ManualOverride = true,
-                LastUpdated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-            });
-            DataStore.SaveMappings(mappings);
-            RefreshMappingsList();
-
-            // Also update any unsynced sessions for this AppID and sync them automatically!
-            var sessions = DataStore.LoadSessions();
-            bool updatedAnySession = false;
-            foreach (var s in sessions)
-            {
-                if (s.AppId == appId && !s.Synced)
-                {
-                    s.BackloggdGameId = selectedResult.GameId;
-                    s.GameTitle = selectedResult.Title;
-                    updatedAnySession = true;
-                    string sid = s.Id;
-                    ThreadPool.QueueUserWorkItem(_ => _tracker.SyncSessionEntryAsync(sid, false));
-                }
-            }
-            if (updatedAnySession)
-            {
-                DataStore.SaveSessions(sessions);
-                RefreshSessionsList();
-            }
-
-            _lblSuggestionStatus.Text = string.Format("✓ Mapped AppID {0} -> {1} (ID {2})", appId, selectedResult.Title, selectedResult.GameId);
-            _lblSuggestionStatus.ForeColor = SuccessGreen;
-        }
-
-        private void BtnDeleteMapping_Click(object sender, EventArgs e)
-        {
-            if (_lvMappings.SelectedItems.Count == 0) return;
-            var map = _lvMappings.SelectedItems[0].Tag as GameMapping;
-            if (map == null) return;
-
-            var mappings = DataStore.LoadMappings();
-            mappings.RemoveAll(m => m.AppId == map.AppId);
-            DataStore.SaveMappings(mappings);
-            RefreshMappingsList();
         }
 
         private void BtnVerifyCookie_Click(object sender, EventArgs e)
