@@ -178,16 +178,17 @@ namespace BackloggdAutoSync
         private CheckBox _chkRunOnStartup;
         private Button _btnSaveSettings;
 
-        // Colors
-        private readonly Color BgDark = Color.FromArgb(22, 24, 30);
-        private readonly Color BgCard = Color.FromArgb(31, 34, 43);
-        private readonly Color BgInput = Color.FromArgb(42, 46, 58);
-        private readonly Color AccentPink = Color.FromArgb(234, 55, 122);
-        private readonly Color AccentBlue = Color.FromArgb(72, 133, 237);
-        private readonly Color TextLight = Color.FromArgb(238, 240, 246);
-        private readonly Color TextMuted = Color.FromArgb(156, 163, 179);
-        private readonly Color SuccessGreen = Color.FromArgb(46, 204, 113);
-        private readonly Color WarnOrange = Color.FromArgb(243, 156, 18);
+        // Colors (Mapped directly to Backloggd's --back-* CSS custom properties)
+        private readonly Color BgDark = UITheme.BgDark;
+        private readonly Color BgCard = UITheme.BgCard;
+        private readonly Color BgInput = UITheme.BgInput;
+        private readonly Color AccentPink = UITheme.AccentPink;
+        private readonly Color AccentBlue = UITheme.AccentBlue;
+        private readonly Color TextLight = UITheme.TextLight;
+        private readonly Color TextMuted = UITheme.TextMuted;
+        private readonly Color SuccessGreen = UITheme.SuccessGreen;
+        private readonly Color WarnOrange = UITheme.WarnOrange;
+        private readonly List<Button> _navButtons = new List<Button>();
 
         public MainForm(bool startMinimized)
         {
@@ -465,18 +466,41 @@ namespace BackloggdAutoSync
             headerLayout.SetRowSpan(_lblAccountBadge, 2);
             _headerPanel.Controls.Add(headerLayout);
 
-            // Tabs
-            _tabControl = new TabControl
+            // Backloggd-style Navigation Bar (Journal | Library | Nintendo Switch | Settings)
+            var navBar = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 42,
+                BackColor = BgDark,
+                Padding = new Padding(14, 0, 14, 0)
+            };
+            navBar.Paint += (s, e) =>
+            {
+                using (var pen = new Pen(UITheme.BorderSubtle, 1))
+                {
+                    e.Graphics.DrawLine(pen, 0, navBar.Height - 1, navBar.Width, navBar.Height - 1);
+                }
+            };
+
+            var navFlow = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Point(14, 6)
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0)
             };
-            UITheme.StyleTabControl(_tabControl);
 
-            var tabSessions = new TabPage("Daily Diary & Sessions") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
-            var tabCollection = new TabPage("Collection / Library") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
-            var tabSwitch = new TabPage("Nintendo Switch Sync") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
-            var tabSettings = new TabPage("Backloggd Account & Settings") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
+            // Borderless Tabs
+            _tabControl = new BorderlessTabControl
+            {
+                Dock = DockStyle.Fill
+            };
+
+            var tabSessions = new TabPage("Journal & Sessions") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14, 12, 14, 14) };
+            var tabCollection = new TabPage("Library") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14, 12, 14, 14) };
+            var tabSwitch = new TabPage("Nintendo Switch") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14, 12, 14, 14) };
+            var tabSettings = new TabPage("Settings") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14, 12, 14, 14) };
 
             BuildSessionsTab(tabSessions);
             BuildCollectionTab(tabCollection);
@@ -487,8 +511,57 @@ namespace BackloggdAutoSync
             _tabControl.TabPages.Add(tabCollection);
             _tabControl.TabPages.Add(tabSwitch);
             _tabControl.TabPages.Add(tabSettings);
+
+            string[] navTitles = new[] { "Journal & Sessions", "Library", "Nintendo Switch", "Settings" };
+            _navButtons.Clear();
+            for (int i = 0; i < navTitles.Length; i++)
+            {
+                int tabIdx = i;
+                var navBtn = new Button
+                {
+                    Text = navTitles[i],
+                    AutoSize = false,
+                    Size = new Size(175, 41),
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = BgDark,
+                    ForeColor = tabIdx == 0 ? UITheme.TextWhite : TextMuted,
+                    Font = new Font("Segoe UI", 10f, tabIdx == 0 ? FontStyle.Bold : FontStyle.Regular),
+                    Cursor = Cursors.Hand,
+                    Margin = new Padding(0, 0, 8, 0),
+                    UseVisualStyleBackColor = false
+                };
+                navBtn.FlatAppearance.BorderSize = 0;
+                navBtn.FlatAppearance.MouseOverBackColor = BgCard;
+                navBtn.FlatAppearance.MouseDownBackColor = BgCard;
+                navBtn.Paint += (s, e) =>
+                {
+                    if (_tabControl.SelectedIndex == tabIdx)
+                    {
+                        using (var accentBrush = new SolidBrush(UITheme.AccentPinkLight))
+                        {
+                            e.Graphics.FillRectangle(accentBrush, 10, navBtn.Height - 3, navBtn.Width - 20, 3);
+                        }
+                    }
+                };
+                navBtn.Click += (s, e) =>
+                {
+                    _tabControl.SelectedIndex = tabIdx;
+                };
+                _navButtons.Add(navBtn);
+                navFlow.Controls.Add(navBtn);
+            }
+            navBar.Controls.Add(navFlow);
+
             _tabControl.SelectedIndexChanged += (s, e) =>
             {
+                for (int i = 0; i < _navButtons.Count; i++)
+                {
+                    bool active = (_tabControl.SelectedIndex == i);
+                    _navButtons[i].ForeColor = active ? UITheme.TextWhite : TextMuted;
+                    _navButtons[i].Font = new Font("Segoe UI", 10f, active ? FontStyle.Bold : FontStyle.Regular);
+                    _navButtons[i].Invalidate();
+                }
+
                 if (_tabControl.SelectedTab == tabCollection && !_collectionLoadedOnce)
                 {
                     _collectionLoadedOnce = true;
@@ -497,6 +570,7 @@ namespace BackloggdAutoSync
             };
 
             this.Controls.Add(_tabControl);
+            this.Controls.Add(navBar);
             this.Controls.Add(_headerPanel);
         }
 

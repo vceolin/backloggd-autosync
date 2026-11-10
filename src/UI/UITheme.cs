@@ -7,17 +7,28 @@ namespace BackloggdAutoSync
 {
     public static class UITheme
     {
-        public static readonly Color BgDark = Color.FromArgb(22, 24, 30);
-        public static readonly Color BgCard = Color.FromArgb(31, 34, 43);
-        public static readonly Color BgHeader = Color.FromArgb(37, 41, 52);
-        public static readonly Color BgInput = Color.FromArgb(42, 46, 58);
-        public static readonly Color BorderSubtle = Color.FromArgb(54, 60, 76);
-        public static readonly Color AccentPink = Color.FromArgb(234, 55, 122);
-        public static readonly Color AccentBlue = Color.FromArgb(72, 133, 237);
-        public static readonly Color TextLight = Color.FromArgb(238, 240, 246);
-        public static readonly Color TextMuted = Color.FromArgb(156, 163, 179);
-        public static readonly Color SuccessGreen = Color.FromArgb(46, 204, 113);
-        public static readonly Color WarnOrange = Color.FromArgb(243, 156, 18);
+        // Official Backloggd CSS Custom Properties (--back-*)
+        public static readonly Color BgDark = Color.FromArgb(22, 24, 28);             // --back-primary: #16181c
+        public static readonly Color BgCard = Color.FromArgb(36, 40, 50);             // --back-secondary: #242832
+        public static readonly Color BgHeader = Color.FromArgb(39, 44, 55);           // --back-field-background: #272c37
+        public static readonly Color BgInput = Color.FromArgb(48, 57, 76);            // --back-field: #30394c
+        public static readonly Color BgHighlight = Color.FromArgb(63, 75, 100);       // --back-field-highlight: #3f4b64
+        public static readonly Color BorderSubtle = Color.FromArgb(59, 65, 78);       // --back-field-border: #3b414e
+
+        public static readonly Color AccentPink = Color.FromArgb(234, 55, 122);       // --back-pink-dk: #ea377a
+        public static readonly Color AccentPinkLight = Color.FromArgb(252, 99, 153);  // --back-pink: #fc6399
+        public static readonly Color AccentBlue = Color.FromArgb(74, 94, 141);        // --back-interact: #4a5e8d
+        public static readonly Color AccentIndigo = Color.FromArgb(131, 157, 249);    // --back-interact-secondary: #839df9
+        public static readonly Color AccentPlaying = Color.FromArgb(133, 111, 239);   // --back-playing: #856fef
+
+        public static readonly Color TextWhite = Color.FromArgb(255, 255, 255);       // #ffffff
+        public static readonly Color TextLight = Color.FromArgb(204, 219, 241);       // --back-text-review: #ccdbf1
+        public static readonly Color TextPrimary = Color.FromArgb(203, 212, 220);     // --back-text: #cbd4dc
+        public static readonly Color TextMuted = Color.FromArgb(143, 156, 167);       // --back-text-secondary: #8f9ca7
+
+        public static readonly Color SuccessGreen = Color.FromArgb(67, 185, 79);      // --back-type-completed: #43b94f
+        public static readonly Color WarnOrange = Color.FromArgb(230, 155, 62);       // --back-type-shelved: #e69b3e
+        public static readonly Color DangerRed = Color.FromArgb(234, 71, 71);         // --back-type-abandoned: #ea4747
 
         public static Color AdjustBrightness(Color c, int delta)
         {
@@ -29,7 +40,7 @@ namespace BackloggdAutoSync
 
         public static Button CreateStyledButton(string text, Color bgColor, int width, int height)
         {
-            bool isNeutral = (bgColor == BgInput || bgColor == BgCard);
+            bool isFieldButton = (bgColor == BgInput || bgColor == BgCard);
             var btn = new Button
             {
                 Text = text,
@@ -40,65 +51,73 @@ namespace BackloggdAutoSync
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
                 Cursor = Cursors.Hand,
-                Margin = new Padding(4, 0, 0, 0),
+                Margin = new Padding(6, 0, 0, 0),
                 UseVisualStyleBackColor = false
             };
-            btn.FlatAppearance.BorderSize = isNeutral ? 1 : 0;
-            if (isNeutral)
+            btn.FlatAppearance.BorderSize = 1;
+            if (bgColor == AccentPink)
+            {
+                btn.FlatAppearance.BorderColor = AccentPinkLight;
+                btn.FlatAppearance.MouseOverBackColor = AccentPinkLight;
+                btn.FlatAppearance.MouseDownBackColor = AdjustBrightness(AccentPink, -18);
+            }
+            else if (bgColor == AccentBlue)
+            {
+                btn.FlatAppearance.BorderColor = Color.FromArgb(92, 115, 168);
+                btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(88, 110, 162);
+                btn.FlatAppearance.MouseDownBackColor = AdjustBrightness(AccentBlue, -14);
+            }
+            else if (isFieldButton)
             {
                 btn.FlatAppearance.BorderColor = BorderSubtle;
+                btn.FlatAppearance.MouseOverBackColor = BgHighlight;
+                btn.FlatAppearance.MouseDownBackColor = BgHeader;
             }
-            btn.FlatAppearance.MouseOverBackColor = AdjustBrightness(bgColor, 18);
-            btn.FlatAppearance.MouseDownBackColor = AdjustBrightness(bgColor, -14);
-            return btn;
-        }
-
-        public static void StyleTabControl(TabControl tabControl)
-        {
-            if (tabControl == null) return;
-            tabControl.DrawMode = TabDrawMode.OwnerDrawFixed;
-            tabControl.SizeMode = TabSizeMode.Fixed;
-            tabControl.ItemSize = new Size(215, 34);
-            tabControl.DrawItem += (s, e) =>
+            else
             {
-                Graphics g = e.Graphics;
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-
-                bool isSelected = (e.Index == tabControl.SelectedIndex);
-                Rectangle tabRect = tabControl.GetTabRect(e.Index);
-                string title = tabControl.TabPages[e.Index].Text;
-
-                using (var bgBrush = new SolidBrush(isSelected ? BgCard : BgDark))
-                {
-                    g.FillRectangle(bgBrush, tabRect);
-                }
-
-                if (isSelected)
-                {
-                    using (var accentBrush = new SolidBrush(AccentPink))
-                    {
-                        g.FillRectangle(accentBrush, tabRect.Left + 8, tabRect.Bottom - 3, tabRect.Width - 16, 3);
-                    }
-                }
-
-                using (var font = new Font("Segoe UI", 9.5f, isSelected ? FontStyle.Bold : FontStyle.Regular))
-                {
-                    TextRenderer.DrawText(
-                        g,
-                        title,
-                        font,
-                        tabRect,
-                        isSelected ? TextLight : TextMuted,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
-                }
-            };
+                btn.FlatAppearance.BorderColor = AdjustBrightness(bgColor, 20);
+                btn.FlatAppearance.MouseOverBackColor = AdjustBrightness(bgColor, 16);
+                btn.FlatAppearance.MouseDownBackColor = AdjustBrightness(bgColor, -14);
+            }
+            return btn;
         }
     }
 
+    /// <summary>
+    /// Borderless TabControl that suppresses the legacy Win32 3D white border around TabPages.
+    /// Navigation is driven by Backloggd-style top navbar buttons in MainForm.
+    /// </summary>
+    public class BorderlessTabControl : TabControl
+    {
+        public BorderlessTabControl()
+        {
+            this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            this.Appearance = TabAppearance.FlatButtons;
+            this.ItemSize = new Size(0, 1);
+            this.SizeMode = TabSizeMode.Fixed;
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            // TCM_ADJUSTRECT = 0x1328: eliminate the 4px white 3D border around TabPages
+            if (m.Msg == 0x1328 && !DesignMode)
+            {
+                m.Result = (IntPtr)1;
+                return;
+            }
+            base.WndProc(ref m);
+        }
+    }
+
+    /// <summary>
+    /// Backloggd-styled table view matching Backloggd's .library-entry-row and Journal tables
+    /// (--back-secondary row surfaces, --back-field-border dividers, --back-pink selection indicator).
+    /// </summary>
     public class DarkListView : ListView
     {
         private int[] _baseColumnWidths;
         private bool _isResizingColumns;
+        private int _hoveredIndex = -1;
 
         public DarkListView()
         {
@@ -108,8 +127,13 @@ namespace BackloggdAutoSync
             this.GridLines = false;
             this.BackColor = UITheme.BgCard;
             this.ForeColor = UITheme.TextLight;
-            this.BorderStyle = BorderStyle.FixedSingle;
+            this.BorderStyle = BorderStyle.None;
             this.OwnerDraw = true;
+            this.HideSelection = false;
+
+            // Increase row height slightly using a small image list (Backloggd spacious row feel)
+            var rowHeightImg = new ImageList { ImageSize = new Size(1, 28) };
+            this.SmallImageList = rowHeightImg;
         }
 
         public void EnableProportionalColumns()
@@ -127,6 +151,31 @@ namespace BackloggdAutoSync
         {
             base.OnSizeChanged(e);
             ApplyProportionalColumnWidths();
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            var hit = HitTest(e.Location);
+            int newHover = hit.Item != null ? hit.Item.Index : -1;
+            if (newHover != _hoveredIndex)
+            {
+                int oldHover = _hoveredIndex;
+                _hoveredIndex = newHover;
+                if (oldHover >= 0 && oldHover < Items.Count) Invalidate(Items[oldHover].Bounds);
+                if (_hoveredIndex >= 0 && _hoveredIndex < Items.Count) Invalidate(Items[_hoveredIndex].Bounds);
+            }
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (_hoveredIndex >= 0 && _hoveredIndex < Items.Count)
+            {
+                int old = _hoveredIndex;
+                _hoveredIndex = -1;
+                Invalidate(Items[old].Bounds);
+            }
         }
 
         private void ApplyProportionalColumnWidths()
@@ -178,11 +227,10 @@ namespace BackloggdAutoSync
             using (var borderPen = new Pen(UITheme.BorderSubtle))
             {
                 e.Graphics.DrawLine(borderPen, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
-                e.Graphics.DrawLine(borderPen, e.Bounds.Right - 1, e.Bounds.Top + 4, e.Bounds.Right - 1, e.Bounds.Bottom - 5);
             }
 
-            Rectangle textRect = new Rectangle(e.Bounds.Left + 8, e.Bounds.Top, Math.Max(0, e.Bounds.Width - 12), e.Bounds.Height);
-            using (var headerFont = new Font("Segoe UI", 9f, FontStyle.Bold))
+            Rectangle textRect = new Rectangle(e.Bounds.Left + 10, e.Bounds.Top, Math.Max(0, e.Bounds.Width - 14), e.Bounds.Height);
+            using (var headerFont = new Font("Segoe UI", 8.75f, FontStyle.Regular))
             {
                 TextRenderer.DrawText(
                     e.Graphics,
@@ -196,12 +244,74 @@ namespace BackloggdAutoSync
 
         protected override void OnDrawItem(DrawListViewItemEventArgs e)
         {
-            e.DrawDefault = true;
+            bool isSelected = e.Item.Selected;
+            bool isHovered = (e.ItemIndex == _hoveredIndex);
+
+            Color rowBg = isSelected
+                ? UITheme.BgInput
+                : (isHovered ? Color.FromArgb(41, 47, 60) : UITheme.BgCard);
+
+            using (var bgBrush = new SolidBrush(rowBg))
+            {
+                e.Graphics.FillRectangle(bgBrush, e.Bounds);
+            }
+
+            // Backloggd row divider: body tr+tr td { border-top: 1px solid var(--back-field-border) }
+            using (var dividerPen = new Pen(UITheme.BorderSubtle))
+            {
+                e.Graphics.DrawLine(dividerPen, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
+            }
+
+            // Backloggd pink active bar on selected rows
+            if (isSelected)
+            {
+                using (var pinkBrush = new SolidBrush(UITheme.AccentPinkLight))
+                {
+                    e.Graphics.FillRectangle(pinkBrush, e.Bounds.Left, e.Bounds.Top, 3, e.Bounds.Height - 1);
+                }
+            }
         }
 
         protected override void OnDrawSubItem(DrawListViewSubItemEventArgs e)
         {
-            e.DrawDefault = true;
+            bool isFirstCol = (e.ColumnIndex == 0);
+            Color textColor;
+
+            if (isFirstCol)
+            {
+                textColor = UITheme.TextWhite;
+            }
+            else if (e.ColumnIndex == Columns.Count - 1 || e.ColumnIndex == Columns.Count - 2)
+            {
+                textColor = e.Item.ForeColor;
+            }
+            else
+            {
+                textColor = UITheme.TextPrimary;
+            }
+
+            Rectangle textRect = new Rectangle(e.Bounds.Left + 10, e.Bounds.Top, Math.Max(0, e.Bounds.Width - 14), e.Bounds.Height);
+            Font fontToUse = isFirstCol
+                ? new Font(this.Font.FontFamily, 9.5f, FontStyle.Bold)
+                : this.Font;
+
+            try
+            {
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    e.SubItem.Text ?? "",
+                    fontToUse,
+                    textRect,
+                    textColor,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            }
+            finally
+            {
+                if (isFirstCol && fontToUse != this.Font)
+                {
+                    fontToUse.Dispose();
+                }
+            }
         }
     }
 }
