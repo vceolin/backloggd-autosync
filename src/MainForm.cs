@@ -397,31 +397,45 @@ namespace BackloggdAutoSync
 
         private void InitializeComponent()
         {
+            this.DoubleBuffered = true;
             this.Icon = LoadOrGenerateIcon();
-            this.Text = "Backloggd AutoSync — Steam Daily Playtime Tracker";
-            this.Size = new Size(960, 680);
-            this.MinimumSize = new Size(860, 580);
+            this.Text = "Backloggd AutoSync — Steam & Switch Playtime + Library Sync";
+            this.Size = new Size(1060, 720);
+            this.MinimumSize = new Size(920, 600);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = BgDark;
             this.ForeColor = TextLight;
             this.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
 
-            // Header Panel
+            // Header Panel (Responsive TableLayoutPanel)
             _headerPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 76,
+                Height = 74,
                 BackColor = BgCard,
-                Padding = new Padding(18, 12, 18, 12)
+                Padding = new Padding(18, 10, 18, 10)
             };
+
+            var headerLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 2,
+                BackColor = Color.Transparent
+            };
+            headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            headerLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 55f));
+            headerLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 45f));
 
             _lblLiveStatus = new Label
             {
                 Text = "Waiting for a Steam game to launch...",
                 Font = new Font("Segoe UI", 12f, FontStyle.Bold),
                 ForeColor = TextLight,
-                AutoSize = true,
-                Location = new Point(18, 14)
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true
             };
 
             _lblLiveTimer = new Label
@@ -429,8 +443,9 @@ namespace BackloggdAutoSync
                 Text = "Monitoring Steam Registry (HKCU\\Software\\Valve\\Steam\\RunningAppID)",
                 Font = new Font("Segoe UI", 9f, FontStyle.Regular),
                 ForeColor = TextMuted,
-                AutoSize = true,
-                Location = new Point(18, 42)
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true
             };
 
             _lblAccountBadge = new Label
@@ -438,16 +453,17 @@ namespace BackloggdAutoSync
                 Text = "Not Connected",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = WarnOrange,
-                AutoSize = false,
+                AutoSize = true,
+                Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleRight,
-                Size = new Size(300, 48),
-                Location = new Point(620, 14),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right
+                Padding = new Padding(12, 0, 0, 0)
             };
 
-            _headerPanel.Controls.Add(_lblLiveStatus);
-            _headerPanel.Controls.Add(_lblLiveTimer);
-            _headerPanel.Controls.Add(_lblAccountBadge);
+            headerLayout.Controls.Add(_lblLiveStatus, 0, 0);
+            headerLayout.Controls.Add(_lblLiveTimer, 0, 1);
+            headerLayout.Controls.Add(_lblAccountBadge, 1, 0);
+            headerLayout.SetRowSpan(_lblAccountBadge, 2);
+            _headerPanel.Controls.Add(headerLayout);
 
             // Tabs
             _tabControl = new TabControl
@@ -455,6 +471,7 @@ namespace BackloggdAutoSync
                 Dock = DockStyle.Fill,
                 Padding = new Point(14, 6)
             };
+            UITheme.StyleTabControl(_tabControl);
 
             var tabSessions = new TabPage("Daily Diary & Sessions") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
             var tabCollection = new TabPage("Collection / Library") { BackColor = BgDark, ForeColor = TextLight, Padding = new Padding(14) };
@@ -485,66 +502,71 @@ namespace BackloggdAutoSync
 
         private void BuildSessionsTab(TabPage page)
         {
-            var topBar = new Panel
+            var topBar = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 52,
+                Height = 54,
                 BackColor = BgCard,
-                Padding = new Padding(12, 8, 12, 8)
+                Padding = new Padding(14, 9, 14, 9),
+                ColumnCount = 2,
+                RowCount = 1
             };
+            topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            topBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            topBar.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
             _lblTodaySummary = new Label
             {
                 Text = "Today's Playtime: 0m across 0 games",
                 Font = new Font("Segoe UI", 10f, FontStyle.Bold),
                 ForeColor = TextLight,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true
+            };
+
+            var actionFlow = new FlowLayoutPanel
+            {
                 AutoSize = true,
-                Location = new Point(14, 15)
+                WrapContents = false,
+                FlowDirection = FlowDirection.LeftToRight,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0)
             };
 
             _btnSyncPending = CreateStyledButton("Sync Pending", AccentPink, 130, 34);
-            _btnSyncPending.Location = new Point(page.Width - 575, 9);
-            _btnSyncPending.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             _btnSyncPending.Click += (s, e) => SyncAllPendingSessions();
 
-            _btnPickGameForSession = CreateStyledButton("Pick / Change Game", AccentBlue, 155, 34);
-            _btnPickGameForSession.Location = new Point(page.Width - 437, 9);
-            _btnPickGameForSession.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnPickGameForSession = CreateStyledButton("Pick / Change Game", AccentBlue, 158, 34);
             _btnPickGameForSession.Click += BtnPickGameForSession_Click;
 
             _btnManualLog = CreateStyledButton("+ Log Session", BgInput, 125, 34);
-            _btnManualLog.Location = new Point(page.Width - 274, 9);
-            _btnManualLog.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             _btnManualLog.Click += BtnManualLog_Click;
 
-            _btnDeleteSession = CreateStyledButton("Delete", BgInput, 80, 34);
-            _btnDeleteSession.Location = new Point(page.Width - 141, 9);
-            _btnDeleteSession.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnDeleteSession = CreateStyledButton("Delete", BgInput, 82, 34);
             _btnDeleteSession.Click += BtnDeleteSession_Click;
 
-            topBar.Controls.Add(_lblTodaySummary);
-            topBar.Controls.Add(_btnSyncPending);
-            topBar.Controls.Add(_btnPickGameForSession);
-            topBar.Controls.Add(_btnManualLog);
-            topBar.Controls.Add(_btnDeleteSession);
-
-            _lvSessions = new ListView
+            actionFlow.Controls.AddRange(new Control[]
             {
-                Dock = DockStyle.Fill,
-                View = View.Details,
-                FullRowSelect = true,
-                GridLines = false,
-                BackColor = BgCard,
-                ForeColor = TextLight,
-                BorderStyle = BorderStyle.FixedSingle
+                _btnSyncPending, _btnPickGameForSession, _btnManualLog, _btnDeleteSession
+            });
+
+            topBar.Controls.Add(_lblTodaySummary, 0, 0);
+            topBar.Controls.Add(actionFlow, 1, 0);
+
+            var lvSessions = new DarkListView
+            {
+                Dock = DockStyle.Fill
             };
-            _lvSessions.Columns.Add("Date", 95);
-            _lvSessions.Columns.Add("Game Title", 240);
-            _lvSessions.Columns.Add("Platform / ID", 105);
-            _lvSessions.Columns.Add("Session Duration", 110);
-            _lvSessions.Columns.Add("Backloggd Status", 145);
-            _lvSessions.Columns.Add("Details (Double-click row to change game)", 215);
-            _lvSessions.DoubleClick += BtnPickGameForSession_Click;
+            lvSessions.Columns.Add("Date", 95);
+            lvSessions.Columns.Add("Game Title", 250);
+            lvSessions.Columns.Add("Platform / ID", 125);
+            lvSessions.Columns.Add("Session Duration", 120);
+            lvSessions.Columns.Add("Backloggd Status", 150);
+            lvSessions.Columns.Add("Details (Double-click row to change game)", 240);
+            lvSessions.EnableProportionalColumns();
+            lvSessions.DoubleClick += BtnPickGameForSession_Click;
+            _lvSessions = lvSessions;
 
             var spacer = new Panel { Dock = DockStyle.Top, Height = 10, BackColor = BgDark };
 
@@ -555,63 +577,84 @@ namespace BackloggdAutoSync
 
         private void BuildCollectionTab(TabPage page)
         {
-            var topBar = new Panel
+            var topBar = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 92,
+                Height = 96,
                 BackColor = BgCard,
-                Padding = new Padding(12, 8, 12, 8)
+                Padding = new Padding(14, 8, 14, 8),
+                ColumnCount = 2,
+                RowCount = 2
             };
+            topBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            topBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            topBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 42f));
+            topBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 38f));
 
             _lblCollectionSummary = new Label
             {
                 Text = "Collection: Click 'Scan Libraries' or open this tab to load your owned Steam & Nintendo Switch games",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = TextLight,
-                AutoSize = true,
-                Location = new Point(14, 12)
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true
             };
 
-            _btnScanCollection = CreateStyledButton("🔄 Scan Libraries", AccentBlue, 132, 32);
-            _btnScanCollection.Location = new Point(page.Width - 690, 8);
-            _btnScanCollection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            var row1Actions = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                WrapContents = false,
+                FlowDirection = FlowDirection.LeftToRight,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 3, 0, 0)
+            };
+
+            _btnScanCollection = CreateStyledButton("🔄 Scan Libraries", AccentBlue, 134, 32);
             _btnScanCollection.Click += (s, e) => ScanAndRefreshCollection(true);
 
-            _btnAutoMatchCollection = CreateStyledButton("✨ Auto-Match View", AccentBlue, 145, 32);
-            _btnAutoMatchCollection.Location = new Point(page.Width - 552, 8);
-            _btnAutoMatchCollection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnAutoMatchCollection = CreateStyledButton("✨ Auto-Match View", AccentBlue, 146, 32);
             _btnAutoMatchCollection.Click += BtnAutoMatchCollection_Click;
 
-            _btnEditCollectionEntry = CreateStyledButton("Edit / Map Game...", BgInput, 138, 32);
-            _btnEditCollectionEntry.Location = new Point(page.Width - 401, 8);
-            _btnEditCollectionEntry.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnEditCollectionEntry = CreateStyledButton("✏️ Edit / Map Game", BgInput, 142, 32);
             _btnEditCollectionEntry.Click += BtnEditCollectionEntry_Click;
 
             _btnSyncSelectedCollection = CreateStyledButton("Sync Selected", AccentPink, 120, 32);
-            _btnSyncSelectedCollection.Location = new Point(page.Width - 257, 8);
-            _btnSyncSelectedCollection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             _btnSyncSelectedCollection.Click += BtnSyncSelectedCollection_Click;
 
-            _btnSyncAllCollection = CreateStyledButton("Sync All Mapped", AccentPink, 125, 32);
-            _btnSyncAllCollection.Location = new Point(page.Width - 131, 8);
-            _btnSyncAllCollection.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _btnSyncAllCollection = CreateStyledButton("Sync All Mapped", AccentPink, 132, 32);
             _btnSyncAllCollection.Click += BtnSyncAllCollection_Click;
+
+            row1Actions.Controls.AddRange(new Control[]
+            {
+                _btnScanCollection, _btnAutoMatchCollection, _btnEditCollectionEntry,
+                _btnSyncSelectedCollection, _btnSyncAllCollection
+            });
+
+            var filterFlow = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                WrapContents = false,
+                FlowDirection = FlowDirection.LeftToRight,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 4, 0, 0)
+            };
 
             var lblFilter = new Label
             {
                 Text = "Show:",
                 ForeColor = TextMuted,
                 AutoSize = true,
-                Location = new Point(14, 54)
+                Margin = new Padding(0, 6, 6, 0)
             };
 
             _cmbCollectionFilter = new ComboBox
             {
-                Location = new Point(60, 50),
                 Width = 220,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = BgInput,
-                ForeColor = TextLight
+                ForeColor = TextLight,
+                Margin = new Padding(0, 2, 14, 0)
             };
             _cmbCollectionFilter.Items.AddRange(new object[]
             {
@@ -628,19 +671,19 @@ namespace BackloggdAutoSync
 
             var lblSearch = new Label
             {
-                Text = "Filter:",
+                Text = "Search:",
                 ForeColor = TextMuted,
                 AutoSize = true,
-                Location = new Point(292, 54)
+                Margin = new Padding(0, 6, 6, 0)
             };
 
             _txtCollectionSearch = new TextBox
             {
-                Location = new Point(338, 51),
-                Width = 200,
+                Width = 215,
                 BackColor = BgInput,
                 ForeColor = TextLight,
-                BorderStyle = BorderStyle.FixedSingle
+                BorderStyle = BorderStyle.FixedSingle,
+                Margin = new Padding(0, 3, 16, 0)
             };
             _txtCollectionSearch.TextChanged += (s, e) => RefreshCollectionList();
 
@@ -650,41 +693,47 @@ namespace BackloggdAutoSync
                 Checked = false,
                 AutoSize = true,
                 ForeColor = TextMuted,
-                Location = new Point(552, 53)
+                Margin = new Padding(0, 5, 0, 0)
             };
             _chkCollectionShowHidden.CheckedChanged += (s, e) => RefreshCollectionList();
 
-            _btnTogglePhysicalDigital = CreateStyledButton("💿/☁ Toggle Physical / Digital", BgInput, 195, 28);
-            _btnTogglePhysicalDigital.Location = new Point(page.Width - 201, 49);
-            _btnTogglePhysicalDigital.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _btnTogglePhysicalDigital.Click += BtnTogglePhysicalDigital_Click;
-
-            topBar.Controls.AddRange(new Control[]
+            filterFlow.Controls.AddRange(new Control[]
             {
-                _lblCollectionSummary, _btnScanCollection, _btnAutoMatchCollection,
-                _btnEditCollectionEntry, _btnSyncSelectedCollection, _btnSyncAllCollection,
-                lblFilter, _cmbCollectionFilter, lblSearch, _txtCollectionSearch,
-                _chkCollectionShowHidden, _btnTogglePhysicalDigital
+                lblFilter, _cmbCollectionFilter, lblSearch, _txtCollectionSearch, _chkCollectionShowHidden
             });
 
-            _lvCollection = new ListView
+            var row2RightFlow = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                WrapContents = false,
+                FlowDirection = FlowDirection.RightToLeft,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 4, 0, 0)
+            };
+
+            _btnTogglePhysicalDigital = CreateStyledButton("💿/☁ Toggle Physical / Digital", BgInput, 205, 30);
+            _btnTogglePhysicalDigital.Click += BtnTogglePhysicalDigital_Click;
+            row2RightFlow.Controls.Add(_btnTogglePhysicalDigital);
+
+            topBar.Controls.Add(_lblCollectionSummary, 0, 0);
+            topBar.Controls.Add(row1Actions, 1, 0);
+            topBar.Controls.Add(filterFlow, 0, 1);
+            topBar.Controls.Add(row2RightFlow, 1, 1);
+
+            var lvCollection = new DarkListView
             {
                 Dock = DockStyle.Fill,
-                View = View.Details,
-                FullRowSelect = true,
-                MultiSelect = true,
-                GridLines = false,
-                BackColor = BgCard,
-                ForeColor = TextLight,
-                BorderStyle = BorderStyle.FixedSingle
+                MultiSelect = true
             };
-            _lvCollection.Columns.Add("Game Title (Local)", 225);
-            _lvCollection.Columns.Add("Source / State", 135);
-            _lvCollection.Columns.Add("Backloggd Association", 220);
-            _lvCollection.Columns.Add("Platform & Edition", 145);
-            _lvCollection.Columns.Add("Ownership & Store", 135);
-            _lvCollection.Columns.Add("Backloggd Library Status", 155);
-            _lvCollection.DoubleClick += BtnEditCollectionEntry_Click;
+            lvCollection.Columns.Add("Game Title (Local)", 230);
+            lvCollection.Columns.Add("Source / State", 140);
+            lvCollection.Columns.Add("Backloggd Association", 230);
+            lvCollection.Columns.Add("Platform & Edition", 145);
+            lvCollection.Columns.Add("Ownership & Store", 135);
+            lvCollection.Columns.Add("Backloggd Library Status", 160);
+            lvCollection.EnableProportionalColumns();
+            lvCollection.DoubleClick += BtnEditCollectionEntry_Click;
+            _lvCollection = lvCollection;
 
             var spacer = new Panel { Dock = DockStyle.Top, Height = 10, BackColor = BgDark };
 
@@ -1533,18 +1582,7 @@ namespace BackloggdAutoSync
 
         private Button CreateStyledButton(string text, Color bgColor, int width, int height)
         {
-            var btn = new Button
-            {
-                Text = text,
-                Size = new Size(width, height),
-                BackColor = bgColor,
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand,
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold)
-            };
-            btn.FlatAppearance.BorderSize = 0;
-            return btn;
+            return UITheme.CreateStyledButton(text, bgColor, width, height);
         }
 
         private void OnUnmappedGamePromptRequested(SessionEntry entry, string rawTitle, List<GameSearchResult> initialResults)
